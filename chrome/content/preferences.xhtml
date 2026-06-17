@@ -1,0 +1,187 @@
+<vbox id="zotero-prefpane-zotero-assistant" style="font-family: system-ui, 'Segoe UI', 'Microsoft YaHei UI', sans-serif;">
+  <html:style>
+    #zotero-prefpane-zotero-assistant .za-pref-wrap {
+      max-width: 520px;
+      padding: 4px 0 16px;
+    }
+    #zotero-prefpane-zotero-assistant .za-pref-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 0 4px;
+      color: #0f172a;
+    }
+    #zotero-prefpane-zotero-assistant .za-pref-lead {
+      font-size: 13px;
+      color: #64748b;
+      margin: 0 0 16px;
+      line-height: 1.5;
+    }
+    #zotero-prefpane-zotero-assistant .za-pref-card {
+      background: #f8fafc;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    #zotero-prefpane-zotero-assistant label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 4px;
+    }
+    #zotero-prefpane-zotero-assistant checkbox {
+      margin-bottom: 8px;
+    }
+    #zotero-prefpane-zotero-assistant html:input[type="text"],
+    #zotero-prefpane-zotero-assistant html:input[type="number"],
+    #zotero-prefpane-zotero-assistant html:input[type="password"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    #zotero-prefpane-zotero-assistant .za-pref-note {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-top: 8px;
+    }
+  </html:style>
+
+  <html:div class="za-pref-wrap">
+    <html:h2 class="za-pref-title">Zotero 助手</html:h2>
+    <html:p class="za-pref-lead">在此配置模型接口与安全模式。侧边栏仅用于执行任务与授权。</html:p>
+
+    <html:div class="za-pref-card">
+      <label>Base URL</label>
+      <html:input
+        id="zotero-assistant-pref-baseURL"
+        type="text"
+        preference="extensions.zoteroAssistant.baseURL"
+      />
+
+      <label>Model</label>
+      <html:input
+        id="zotero-assistant-pref-model"
+        type="text"
+        preference="extensions.zoteroAssistant.model"
+      />
+
+      <label>API 类型</label>
+      <radiogroup
+        id="zotero-assistant-pref-apiMode"
+        preference="extensions.zoteroAssistant.apiMode"
+        native="true"
+      >
+        <radio label="自动（默认 Chat Completions）" value="auto" />
+        <radio label="Chat Completions（/chat/completions）" value="chat" />
+        <radio label="Responses（/responses）" value="responses" />
+        <radio label="旧式 Completions（/completions）" value="completions" />
+      </radiogroup>
+      <html:p class="za-pref-note">Base URL 可填写根路径，例如 https://api.openai.com/v1；插件会按这里选择的 API 类型自动补全 endpoint。</html:p>
+
+      <label>API Key</label>
+      <html:input
+        id="zotero-assistant-pref-apiKey"
+        type="password"
+        preference="extensions.zoteroAssistant.apiKey"
+      />
+    </html:div>
+
+    <html:div class="za-pref-card">
+      <label>Live 搜索（live_search）</label>
+      <radiogroup
+        id="zotero-assistant-pref-webSearchProvider"
+        preference="extensions.zoteroAssistant.webSearchProvider"
+        native="true"
+      >
+        <radio label="自动（有 Brave Key 则用 Brave，否则 DuckDuckGo）" value="auto" />
+        <radio label="Brave Search API" value="brave" />
+        <radio label="DuckDuckGo Instant Answer" value="duckduckgo" />
+      </radiogroup>
+
+      <label>Brave Search API Key（可选）</label>
+      <html:input
+        id="zotero-assistant-pref-braveSearchApiKey"
+        type="password"
+        preference="extensions.zoteroAssistant.braveSearchApiKey"
+      />
+      <html:p class="za-pref-note">
+        助手工具 live_search / web_fetch 会访问公网。Brave key 见
+        <html:a href="https://brave.com/search/api/">Brave Search API</html:a>。
+        web_fetch 将页面转为 Markdown 供模型阅读（类似 Claude Code WebFetch）。
+      </html:p>
+    </html:div>
+
+    <html:div class="za-pref-card">
+      <label>Safety Mode</label>
+      <radiogroup
+        id="zotero-assistant-pref-safetyMode"
+        preference="extensions.zoteroAssistant.safetyMode"
+        native="true"
+      >
+        <radio label="确认模式" value="confirm" />
+        <radio label="AI 审核模式" value="review" />
+        <radio label="完全开放模式" value="open" />
+      </radiogroup>
+      <html:p class="za-pref-note">API key 保存在本机 Zotero 偏好中，请勿在不可信环境使用。</html:p>
+    </html:div>
+
+    <html:div class="za-pref-card">
+      <checkbox
+        id="zotero-assistant-pref-sessionMemoryEnabled"
+        label="启用本会话任务记忆"
+        preference="extensions.zoteroAssistant.sessionMemoryEnabled"
+        native="true"
+      />
+      <checkbox
+        id="zotero-assistant-pref-autoCompressionEnabled"
+        label="启用任务上下文自动压缩"
+        preference="extensions.zoteroAssistant.autoCompressionEnabled"
+        native="true"
+      />
+
+      <label>上下文最大 token（超过则压缩）</label>
+      <html:input
+        id="zotero-assistant-pref-contextCompressionMaxTokens"
+        type="number"
+        min="8000"
+        max="2000000"
+        step="1000"
+        preference="extensions.zoteroAssistant.contextCompressionMaxTokens"
+      />
+
+      <label>压缩后目标 token（摘要体量）</label>
+      <html:input
+        id="zotero-assistant-pref-contextCompressionTargetTokens"
+        type="number"
+        min="1000"
+        max="500000"
+        step="500"
+        preference="extensions.zoteroAssistant.contextCompressionTargetTokens"
+      />
+      <html:p class="za-pref-note">默认最大 128000 token、压缩目标 16000 token（按约 4 字符/token 估算）。同一聊天会话内任务与模型上下文连续保留，除非你在侧边栏「清除当前任务」。本会话任务记忆仅在内存中，重启 Zotero 后清空。</html:p>
+    </html:div>
+
+    <html:div class="za-pref-card">
+      <checkbox
+        id="zotero-assistant-pref-debugMode"
+        label="启用调试模式"
+        preference="extensions.zoteroAssistant.debugMode"
+        native="true"
+      />
+      <html:p class="za-pref-note">开启后，模型失败、工具连续失败、空响应等问题会额外写出详细诊断文件。</html:p>
+
+      <label>调试输出目录</label>
+      <html:input
+        id="zotero-assistant-pref-debugOutputDir"
+        type="text"
+        preference="extensions.zoteroAssistant.debugOutputDir"
+        placeholder="例如 C:\Users\dell\Documents\zotero-assistant-debug"
+      />
+      <html:p class="za-pref-note">目录不存在时会尝试自动创建。调试文件可能包含任务上下文、模型原始返回和文献元数据，请仅写入可信目录。</html:p>
+    </html:div>
+  </html:div>
+</vbox>

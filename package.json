@@ -1,0 +1,15 @@
+{
+  "name": "zotero-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Zotero 9 in-client assistant plugin with task harness, approvals, audit log, and reversible actions.",
+  "type": "module",
+  "scripts": {
+    "build": "python3 scripts/build_xpi.py",
+    "pack": "python3 scripts/build_xpi.py",
+    "check": "node --check bootstrap.js && node --check chrome/content/zotero-assistant.js && node --check scripts/build-xpi.mjs && python3 -c \"import ast, pathlib; ast.parse(pathlib.Path('scripts/build_xpi.py').read_text(encoding='utf-8'))\""
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

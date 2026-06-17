@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "Zotero Assistant",
+  "version": "0.1.0",
+  "description": "Zotero 9 desktop assistant with task harness, button approvals, audit log, and reversible library actions.",
+  "homepage_url": "https://example.com/zotero-assistant",
+  "applications": {
+    "zotero": {
+      "id": "zotero-assistant@example.com",
+      "update_url": "https://example.com/zotero-assistant/updates.json",
+      "strict_min_version": "9.0",
+      "strict_max_version": "9.0.*"
+    }
+  }
+}
