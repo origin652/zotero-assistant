@@ -60,6 +60,8 @@ var ZoteroAssistantPluginLibrary = (() => {
     WEB_SEARCH_USER_AGENT,
     INDEX_NOTIFIER_TYPES,
     SESSION_GRANT_TOOL,
+    REQUEST_READ_APPROVAL_TOOL,
+    SENSITIVE_READ_TOOLS,
     READ_TOOLS,
     LOW_RISK_WRITE_TOOLS,
     HIGH_RISK_WRITE_TOOLS,
@@ -1542,6 +1544,38 @@ var ZoteroAssistantPluginLibrary = (() => {
       requestedScope: args.scope || "当前激活库整库元数据",
       reason: args.reason || "",
       overview
+    };
+  },
+
+  async toolRequestReadApproval(args) {
+    const safeArgs = args || {};
+    const targetTool = String(safeArgs.targetTool || "").trim();
+    if (!targetTool) {
+      return { ok: false, error: "缺少 targetTool，请说明你接下来要调用的读工具。" };
+    }
+    const mode = Zotero.Prefs.get(PREFS.safetyMode, true) || DEFAULT_SAFETY_MODE;
+    if (mode !== "review") {
+      // Outside review mode there is no AI review layer; reads are governed by the existing
+      // static rules. Tell the model it may proceed directly.
+      return {
+        ok: true,
+        approved: true,
+        mode,
+        level: "n/a",
+        reason: "当前安全模式不启用 AI 审核，可直接调用目标读工具。"
+      };
+    }
+    const audit = await this.auditToolCall(REQUEST_READ_APPROVAL_TOOL, {
+      targetTool,
+      reason: safeArgs.reason || "",
+      scopeHint: safeArgs.scopeHint || ""
+    });
+    return {
+      ok: true,
+      approved: audit.level === "low",
+      level: audit.level,
+      reason: audit.reason,
+      targetTool
     };
   },
 

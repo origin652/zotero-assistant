@@ -302,6 +302,12 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         return { tone: "warning", badge: "调试", title: "调试文件写入失败", detail: this.truncateText(data.error || data.path || "", 240), meta: time };
       case "plugin.started":
         return { tone: "neutral", badge: "插件", title: "插件已启动", detail: `版本 ${data.version || ""}`.trim(), meta: time };
+      case "ai_review": {
+        const levelLabel = data.level === "low" ? "低风险" : data.level === "mid" ? "中等风险" : "高风险";
+        const tone = data.level === "low" ? "success" : data.level === "mid" ? "warning" : "danger";
+        const title = `AI 审核 ${data.toolName || ""}：${levelLabel}${data.ok === false ? "（审核失败）" : ""}`;
+        return { tone, badge: "审核", title, detail: this.truncateText(data.reason || "", 220), meta: time };
+      }
       default:
         return {
           tone: "neutral",
@@ -404,6 +410,18 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       return;
     }
     const pending = this.task.pendingApproval;
+    if (pending.aiLevel) {
+      const tag = this.el(state.doc, "p", this.aiRiskTagClass(pending.aiLevel), this.aiRiskTagText(pending.aiLevel));
+      tag.style.fontWeight = "600";
+      tag.style.marginBottom = "4px";
+      body.appendChild(tag);
+      if (pending.aiReason) {
+        const reason = this.el(state.doc, "p", "za-muted", `理由：${pending.aiReason}`);
+        reason.style.marginBottom = "6px";
+        reason.style.lineHeight = "1.5";
+        body.appendChild(reason);
+      }
+    }
     const summary = this.el(state.doc, "p", "", pending.summary);
     summary.style.lineHeight = "1.5";
     body.appendChild(summary);
@@ -437,6 +455,26 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       trigger_plugin_command: `AI 请求触发其他插件命令：${args.commandId || ""}。${args.summary || ""}`
     };
     return summaries[toolName] || `AI 请求执行 ${toolName}。`;
+  },
+
+  aiRiskTagClass(level) {
+    if (level === "low") {
+      return "za-risk-low";
+    }
+    if (level === "mid") {
+      return "za-risk-mid";
+    }
+    return "za-risk-high";
+  },
+
+  aiRiskTagText(level) {
+    if (level === "low") {
+      return "【AI：低风险】";
+    }
+    if (level === "mid") {
+      return "【AI：中等风险】";
+    }
+    return "【AI：高风险】";
   },
 
   renderGrantState(state) {
@@ -695,11 +733,28 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     }
     const pending = this.task.pendingApproval;
     this.log("approval.rejected", pending);
-    this.task.pendingApproval = null;
-    this.task.status = "paused";
-    this.task.phase = "approval_rejected";
-    await this.safeUpdateSessionMemoryForTask("approval_rejected");
+    const task = this.task;
+    task.pendingApproval = null;
+    // Feed the rejection back to the model as a tool result so it can pick a different
+    // approach instead of stalling. Do not pause; resume the loop automatically.
+    task.messages.push({
+      role: "tool",
+      tool_call_id: pending.id,
+      content: JSON.stringify({
+        ok: false,
+        rejected: true,
+        error: `用户拒绝了这次 ${pending.toolName} 调用。请不要重复请求同一个操作,改用其它方案、缩小范围,或向用户说明为什么需要这个操作。`,
+        toolName: pending.toolName
+      })
+    });
+    task.status = "running";
+    task.phase = "approval_rejected_resuming";
+    this.flushChatTurnToDisplay();
     this.renderAll();
+    if (task.status === "running") {
+      this.runTaskLoopInBackground(this.firstState());
+    }
+    await this.safeUpdateSessionMemoryForTask("approval_rejected_resuming");
   },
 
   summarizeToolResult(result) {

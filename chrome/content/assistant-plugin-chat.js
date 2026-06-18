@@ -321,17 +321,17 @@ var ZoteroAssistantPluginChat = (() => {
     event.preventDefault();
     event.stopPropagation();
     await this.syncSelectionAskShortcutTargets(state);
-    state.chatMinimized = false;
-    this.showChatPanel(state);
 
     const snapshot = await this.readSelectionAskSnapshot(state, event);
     if (!snapshot.ok) {
       state.pendingSelectionAskDraft = null;
       this.log("selection.ask.no_selection", { reason: snapshot.error || "no_selection" });
+      state.chatMinimized = false;
       this.showChatNotice(state, "未检测到可提问的选中文本。你可以直接在这里输入问题。");
       return;
     }
     const draft = await this.buildSelectionAskDraft(state, snapshot);
+    state.chatMinimized = false;
     this.prepareSelectionAskDraft(state, draft);
   },
 
@@ -478,6 +478,8 @@ var ZoteroAssistantPluginChat = (() => {
             type: "reader",
             label: lines[0],
             lines,
+            libraryID: attachment && attachment.libraryID ? attachment.libraryID : "",
+            libraryName: attachment && attachment.libraryID ? this.getLibraryName(attachment.libraryID) : "",
             itemKey: owner && owner.key ? owner.key : "",
             attachmentKey: attachment && attachment.key ? attachment.key : "",
             pageLabel: pageText
@@ -530,6 +532,8 @@ var ZoteroAssistantPluginChat = (() => {
       meta: {
         sourceType: source.type || "zotero_window",
         sourceLabel: source.label || "Zotero 窗口选区",
+        libraryID: source.libraryID || "",
+        libraryName: source.libraryName || "",
         itemKey: source.itemKey || "",
         attachmentKey: source.attachmentKey || "",
         pageLabel: source.pageLabel || "",
@@ -602,6 +606,8 @@ var ZoteroAssistantPluginChat = (() => {
     const data = Object.assign({
       sourceType: meta && meta.sourceType || "",
       sourceLabel: meta && meta.sourceLabel || "",
+      libraryID: meta && meta.libraryID || "",
+      libraryName: meta && meta.libraryName || "",
       itemKey: meta && meta.itemKey || "",
       attachmentKey: meta && meta.attachmentKey || "",
       pageLabel: meta && meta.pageLabel || "",
@@ -610,6 +616,28 @@ var ZoteroAssistantPluginChat = (() => {
       truncated: !!(meta && meta.truncated)
     }, extra);
     return data;
+  },
+
+  selectionAskLibraryID(meta) {
+    const raw = meta && meta.libraryID;
+    if (!raw) {
+      return null;
+    }
+    const numeric = Number(raw);
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+  },
+
+  taskLibraryFromSelectionOrActive(state, selectionAskMeta) {
+    const selectionLibraryID = this.selectionAskLibraryID(selectionAskMeta);
+    const libraryID = selectionLibraryID || this.getActiveLibraryID(state.win);
+    const libraryName = selectionLibraryID && selectionAskMeta && selectionAskMeta.libraryName
+      ? selectionAskMeta.libraryName
+      : this.getLibraryName(libraryID);
+    return {
+      libraryID,
+      libraryName,
+      source: selectionLibraryID ? "selection" : "active"
+    };
   },
 
   consumeSelectionAskMetaForText(state, text) {
@@ -1089,6 +1117,17 @@ var ZoteroAssistantPluginChat = (() => {
     reject.style.color = "#b91c1c";
     buttons.appendChild(reject);
     card.appendChild(title);
+    if (pending.aiLevel) {
+      const tag = this.el(state.doc, "div", this.aiRiskTagClass(pending.aiLevel), this.aiRiskTagText(pending.aiLevel));
+      tag.style.marginBottom = "4px";
+      card.appendChild(tag);
+      if (pending.aiReason) {
+        const reason = this.el(state.doc, "div", "za-muted", `理由：${pending.aiReason}`);
+        reason.style.whiteSpace = "pre-wrap";
+        reason.style.marginBottom = "6px";
+        card.appendChild(reason);
+      }
+    }
     card.appendChild(summary);
     card.appendChild(buttons);
     body.appendChild(card);
@@ -1234,9 +1273,12 @@ var ZoteroAssistantPluginChat = (() => {
     }
     let libraryID;
     let libraryName;
+    let libraryBindingSource = "active";
     try {
-      libraryID = this.getActiveLibraryID(state.win);
-      libraryName = this.getLibraryName(libraryID);
+      const taskLibrary = this.taskLibraryFromSelectionOrActive(state, selectionAskMeta);
+      libraryID = taskLibrary.libraryID;
+      libraryName = taskLibrary.libraryName;
+      libraryBindingSource = taskLibrary.source;
     } catch (error) {
       this.showChatNotice(state, `无法读取当前文献库：${error}`);
       return false;
@@ -1253,7 +1295,7 @@ var ZoteroAssistantPluginChat = (() => {
       messages: [{ role: "user", content: taskText }],
       pendingApproval: null,
       subtasks: [
-        `绑定任务到当前激活库：${libraryName}`,
+        `${libraryBindingSource === "selection" ? "绑定任务到选区来源库" : "绑定任务到当前激活库"}：${libraryName}`,
         "读取默认 Zotero 上下文",
         this.hasSessionReadGrant(libraryID) ? "注入整库鸟瞰图" : "按需申请整库元数据读取",
         "制定工具调用计划"
@@ -1282,7 +1324,7 @@ var ZoteroAssistantPluginChat = (() => {
       sessionMemoryChars: 0,
       selectionAsk: selectionAskMeta ? this.selectionAskLogPayload(selectionAskMeta) : null
     };
-    const taskStartedLog = { id: this.task.id, prompt: taskText, libraryID, libraryName, status: this.task.status };
+    const taskStartedLog = { id: this.task.id, prompt: taskText, libraryID, libraryName, libraryBindingSource, status: this.task.status };
     if (selectionAskMeta) {
       taskStartedLog.prompt = "[selection ask prompt omitted]";
       taskStartedLog.selectionAsk = this.selectionAskLogPayload(selectionAskMeta);
@@ -1604,13 +1646,17 @@ var ZoteroAssistantPluginChat = (() => {
 
   async continueConversationWithUserMessage(state, taskText, options = {}) {
     const selectionAskMeta = options.selectionAskMeta || null;
-    const libraryID = this.getActiveLibraryID(state.win);
+    const taskLibrary = this.taskLibraryFromSelectionOrActive(state, selectionAskMeta);
+    const libraryID = taskLibrary.libraryID;
     if (this.task.libraryID && this.task.libraryID !== libraryID) {
       this.task.libraryID = libraryID;
-      this.task.libraryName = this.getLibraryName(libraryID);
+      this.task.libraryName = taskLibrary.libraryName;
+      const switchReason = taskLibrary.source === "selection"
+        ? "The user sent a selected-text question from a Zotero source in another library."
+        : "The user switched the active Zotero library in the UI.";
       this.task.messages.push({
         role: "system",
-        content: `The user switched the active Zotero library in the UI. This task is now bound to: ${this.task.libraryName} (${libraryID}). Re-read context if library-specific work continues.`
+        content: `${switchReason} This task is now bound to: ${this.task.libraryName} (${libraryID}). Re-read context if library-specific work continues.`
       });
     }
     this.task.status = "running";

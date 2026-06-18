@@ -5,6 +5,7 @@ var ZoteroAssistantPluginCore = (() => {
     PREFS,
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
+    DEFAULT_AUDIT_MODEL,
     DEFAULT_API_MODE,
     DEFAULT_SAFETY_MODE,
     DEFAULT_SELECTION_ASK_SHORTCUT,
@@ -151,6 +152,7 @@ var ZoteroAssistantPluginCore = (() => {
   ensurePrefs() {
     this.setDefault(PREFS.baseURL, DEFAULT_BASE_URL);
     this.setDefault(PREFS.model, DEFAULT_MODEL);
+    this.setDefault(PREFS.auditModel, DEFAULT_AUDIT_MODEL);
     this.setDefault(PREFS.apiMode, DEFAULT_API_MODE);
     this.setDefault(PREFS.apiKey, "");
     this.setDefault(PREFS.safetyMode, DEFAULT_SAFETY_MODE);

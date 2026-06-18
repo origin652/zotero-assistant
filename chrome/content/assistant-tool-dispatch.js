@@ -6,6 +6,7 @@ var ZoteroAssistantToolDispatch = (() => {
       read_current_context: (ctx) => ctx.readCurrentContext(ctx.currentTaskLibraryID()),
       read_item_fields: (ctx, args) => ctx.toolReadItemFields(args),
       read_current_reader_pages: (ctx) => ctx.toolReadCurrentReaderPages(),
+      request_read_approval: (ctx, args) => ctx.toolRequestReadApproval(args),
       request_expanded_context: (ctx, args) => ctx.toolExpandedContext(args),
       read_library_overview: (ctx, args) => ctx.toolReadLibraryOverview(args),
       browse_library_items: (ctx, args) => ctx.toolBrowseLibraryItems(args),

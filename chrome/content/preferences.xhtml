@@ -69,6 +69,15 @@
         preference="extensions.zoteroAssistant.model"
       />
 
+      <label>审核模型（AI 审核模式专用，留空则用上面的 Model）</label>
+      <html:input
+        id="zotero-assistant-pref-auditModel"
+        type="text"
+        preference="extensions.zoteroAssistant.auditModel"
+        placeholder="留空则使用主 Model"
+      />
+      <html:p class="za-pref-note">AI 审核模式（review）下，每次工具调用前会用此模型评估风险。建议填一个便宜快速的小模型以降低延迟与成本，留空则复用主 Model 与同一 Base URL / API Key。</html:p>
+
       <label>API 类型</label>
       <radiogroup
         id="zotero-assistant-pref-apiMode"

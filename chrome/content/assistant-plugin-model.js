@@ -60,10 +60,14 @@ var ZoteroAssistantPluginModel = (() => {
     WEB_SEARCH_USER_AGENT,
     INDEX_NOTIFIER_TYPES,
     SESSION_GRANT_TOOL,
+    REQUEST_READ_APPROVAL_TOOL,
+    SENSITIVE_READ_TOOLS,
     READ_TOOLS,
     LOW_RISK_WRITE_TOOLS,
     HIGH_RISK_WRITE_TOOLS,
-    TOOL_DEFINITIONS
+    TOOL_DEFINITIONS,
+    DEFAULT_AUDIT_MODEL,
+    AUDIT_FETCH_TIMEOUT_MS
   } = ZoteroAssistantConstants;
   const {
     safeCall,
@@ -152,6 +156,7 @@ var ZoteroAssistantPluginModel = (() => {
       "When a user wants you to supplement the Zotero right-pane metadata, first inspect the item with read_item_fields, then update fields and creators with update_metadata.",
       "Full text reading is low risk but must be explicit. Use read_fulltext_page one item at a time and only after metadata suggests it is necessary.",
       "Reader page context is low risk but must be explicit. If the user asks about the currently open article page, call read_current_reader_pages first; it reads only the foreground Zotero reader page plus neighboring pages and page annotations.",
+      "Sensitive reads in review mode: before calling read_fulltext_page, read_current_reader_pages, or a broad browse_library_items request when safetyMode is review, first call request_read_approval with the target tool, a one-sentence reason, and an optional scope hint. It returns whether the read is approved plus the reviewer's risk level and reason. If approved, call the target read tool next; if not approved, explain to the user why the read was held back.",
       "Settings: use browse_preferences to drill down from the top-level preference tree, search_preferences to find settings, and read_preferences to inspect exact values. Sensitive settings are masked; never ask the user to reveal API keys, tokens, passwords, or secrets to you.",
       "Settings UI: call list_preference_panes to discover built-in and plugin preference pane ids; call open_zotero_preferences with optional pane_id to open a specific page (another plugin or Zotero General/Sync/Export/etc.). Omit pane_id for this assistant pane.",
       "Settings writes: use set_preference only for existing non-sensitive Zotero or plugin preferences. Preserve the existing value type. For sensitive settings, call open_zotero_preferences and ask the user to configure them manually.",
@@ -221,7 +226,8 @@ var ZoteroAssistantPluginModel = (() => {
       throw new Error("尚未配置 API key。");
     }
     const baseURL = (Zotero.Prefs.get(PREFS.baseURL, true) || DEFAULT_BASE_URL).trim();
-    const model = Zotero.Prefs.get(PREFS.model, true) || DEFAULT_MODEL;
+    const modelOverride = options.modelOverride && String(options.modelOverride).trim();
+    const model = modelOverride || Zotero.Prefs.get(PREFS.model, true) || DEFAULT_MODEL;
     const apiMode = Zotero.Prefs.get(PREFS.apiMode, true) || DEFAULT_API_MODE;
     const endpoint = this.resolveModelEndpoint(baseURL, apiMode);
     const fetchImpl = this.getFetch();
@@ -329,6 +335,193 @@ var ZoteroAssistantPluginModel = (() => {
       return mode;
     }
     return DEFAULT_API_MODE;
+  },
+
+  auditSystemInstruction() {
+    return [
+      "You are a risk reviewer for a Zotero desktop AI assistant operating in review safety mode.",
+      "You are given a single tool call the assistant wants to execute, plus a one-line task goal.",
+      "Judge the risk of executing this exact call right now in this context.",
+      "low: clearly safe, reversible, small scope, aligned with the task goal.",
+      "mid: somewhat risky, large scope, or only loosely tied to the goal — worth a human glance.",
+      "high: likely destructive, irreversible, large-scale, or off-goal — must be authorized by a human.",
+      "Respond with ONE line of JSON only, no prose, no code fences:",
+      "{\"level\":\"low|mid|high\",\"reason\":\"一句中文说明\"}",
+      "Keep reason under 40 Chinese characters."
+    ].join("\n");
+  },
+
+  auditModelName() {
+    const name = (Zotero.Prefs.get(PREFS.auditModel, true) || DEFAULT_AUDIT_MODEL || "").trim();
+    return name || (Zotero.Prefs.get(PREFS.model, true) || DEFAULT_MODEL || "").trim();
+  },
+
+  async auditToolCall(toolName, args) {
+    const argsSummary = this.summarizeToolArgs(toolName, args);
+    const taskGoal = this.auditTaskGoal();
+    const payload = {
+      tool: toolName,
+      args: argsSummary,
+      taskGoal,
+      safetyMode: "review"
+    };
+    let level = "high";
+    let reason = "审核不可用，需人工确认。";
+    let ok = false;
+    try {
+      const auditPromise = this.callModelWithRetries(
+        [{ role: "user", content: JSON.stringify(payload) }],
+        {
+          disableTools: true,
+          disableToolParsing: true,
+          plainTextOnly: true,
+          systemInstruction: this.auditSystemInstruction(),
+          modelOverride: this.auditModelName()
+        }
+      );
+      const timeoutPromise = new Promise((resolve) => {
+        const timer = Components.classes["@mozilla.org/timer;1"]
+          .createInstance(Components.interfaces.nsITimer);
+        timer.initWithCallback({ notify: () => resolve("__timeout__") }, AUDIT_FETCH_TIMEOUT_MS, Components.interfaces.nsITimer.TYPE_ONE_SHOT);
+      });
+      const raw = await Promise.race([auditPromise, timeoutPromise]);
+      if (raw === "__timeout__") {
+        throw new Error(`审核超时（${AUDIT_FETCH_TIMEOUT_MS}ms）`);
+      }
+      const parsed = this.parseAuditResponse(raw && raw.content);
+      if (parsed) {
+        level = parsed.level;
+        reason = parsed.reason || reason;
+        ok = true;
+      } else {
+        throw new Error("审核返回无法解析。");
+      }
+    } catch (error) {
+      level = "high";
+      reason = `审核失败：${(error && error.message) || error}。需人工确认。`;
+      ok = false;
+    }
+    this.log("ai_review", { toolName, argsSummary, level, reason, ok });
+    return { level, reason, ok };
+  },
+
+  parseAuditResponse(text) {
+    if (!text) {
+      return null;
+    }
+    const candidates = [];
+    const trimmed = String(text).trim();
+    candidates.push(trimmed);
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+    if (fenced) {
+      candidates.push(fenced[1].trim());
+    }
+    const braceMatch = /(\{[\s\S]*\})/.exec(trimmed);
+    if (braceMatch) {
+      candidates.push(braceMatch[1].trim());
+    }
+    for (const candidate of candidates) {
+      try {
+        const obj = JSON.parse(candidate);
+        const level = String(obj && obj.level || "").trim().toLowerCase();
+        if (level === "low" || level === "mid" || level === "high") {
+          return { level, reason: String(obj.reason || "").trim() };
+        }
+      } catch (error) {
+        // try next candidate
+      }
+    }
+    return null;
+  },
+
+  auditTaskGoal() {
+    if (!this.task) {
+      return "";
+    }
+    if (this.task.goal && String(this.task.goal).trim()) {
+      return String(this.task.goal).trim();
+    }
+    const messages = Array.isArray(this.task.messages) ? this.task.messages : [];
+    for (const message of messages) {
+      if (message && message.role === "user" && String(message.content || "").trim()) {
+        return truncateText(String(message.content), 120);
+      }
+    }
+    return "";
+  },
+
+  isAuditScopeTool(toolName) {
+    if (LOW_RISK_WRITE_TOOLS.has(toolName) || HIGH_RISK_WRITE_TOOLS.has(toolName)) {
+      return true;
+    }
+    if (SENSITIVE_READ_TOOLS.has(toolName)) {
+      return true;
+    }
+    if (toolName === "set_preference") {
+      return true;
+    }
+    return false;
+  },
+
+  async applyAuditApproval(approval, toolName, args, call) {
+    if (!approval) {
+      return;
+    }
+    const mode = Zotero.Prefs.get(PREFS.safetyMode, true) || DEFAULT_SAFETY_MODE;
+    if (mode !== "review") {
+      return;
+    }
+    // request_read_approval is a flow tool; its execute body performs the audit and returns the
+    // verdict to the model. Do not pre-audit or pop a button for it here.
+    if (toolName === REQUEST_READ_APPROVAL_TOOL) {
+      return;
+    }
+    if (!this.isAuditScopeTool(toolName)) {
+      return;
+    }
+    // Decision: "记住则跳过审核". Skip the AI audit only when the static rule already allows
+    // the call because the user previously remembered/granted it. Low-risk writes that are
+    // auto-allowed by the static set are still audited (decision: 写工具全审) so the AI can
+    // upgrade them to a button if the specific args look risky.
+    const rememberedKey = this.approvalKey(toolName, args);
+    const isRemembered = toolName === "set_preference"
+      ? this.hasPreferencePrefixGrant(args && args.name)
+      : !!this.rememberedApprovals[rememberedKey];
+    if (isRemembered && approval.allowed) {
+      return;
+    }
+    // request_expanded_context (SESSION_GRANT_TOOL) is handled by its own grant flow, not audited.
+    if (toolName === SESSION_GRANT_TOOL) {
+      return;
+    }
+    // request_zotero_restart always requires explicit human authorization; do not let audit auto-approve.
+    if (toolName === "request_zotero_restart") {
+      return;
+    }
+    const previousPhase = this.task && this.task.phase;
+    if (this.task) {
+      this.task.phase = "ai_reviewing";
+      this.renderAll();
+    }
+    let audit;
+    try {
+      audit = await this.auditToolCall(toolName, args);
+    } finally {
+      if (this.task) {
+        this.task.phase = previousPhase || "calling_model";
+      }
+    }
+    if (audit.level === "low") {
+      approval.required = false;
+      approval.allowed = true;
+      approval.aiLevel = "low";
+      approval.aiReason = audit.reason || "";
+    } else {
+      approval.required = true;
+      approval.allowed = false;
+      approval.aiLevel = audit.level;
+      approval.aiReason = audit.reason || "";
+    }
   },
 
   sanitizeToolArgs(toolName, args) {
@@ -889,9 +1082,14 @@ var ZoteroAssistantPluginModel = (() => {
         continue;
       }
       const approval = this.evaluateApproval(name, args);
+      await this.applyAuditApproval(approval, name, args, call);
       if (approval.required && !approval.allowed) {
         this.task.status = "waiting";
         this.task.pendingApproval = this.buildPendingApproval(call.id, name, args);
+        if (approval.aiLevel) {
+          this.task.pendingApproval.aiLevel = approval.aiLevel;
+          this.task.pendingApproval.aiReason = approval.aiReason || "";
+        }
         this.log("approval.requested", this.task.pendingApproval);
         this.flushChatTurnToDisplay();
         this.renderAll();

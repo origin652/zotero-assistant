@@ -228,7 +228,7 @@ var ZoteroAssistantPluginPrefs = (() => {
     if (meta.isHiddenOrInternal) {
       return "high";
     }
-    if ([PREFS.baseURL, PREFS.model, PREFS.apiMode, PREFS.safetyMode, PREFS.debugOutputDir].includes(meta.name)) {
+    if ([PREFS.baseURL, PREFS.model, PREFS.auditModel, PREFS.apiMode, PREFS.safetyMode, PREFS.debugOutputDir].includes(meta.name)) {
       return "high";
     }
     if ([
@@ -466,6 +466,7 @@ var ZoteroAssistantPluginPrefs = (() => {
     return new Set([
       PREFS.baseURL,
       PREFS.model,
+      PREFS.auditModel,
       PREFS.apiMode,
       PREFS.apiKey,
       PREFS.safetyMode,

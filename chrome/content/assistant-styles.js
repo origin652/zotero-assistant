@@ -564,6 +564,9 @@ var ZoteroAssistantStyles = (() => {
 .za-log-type { color: var(--za-text); font-weight: 600; }
 .za-grant-on { color: #15803d; font-weight: 600; }
 .za-grant-off { color: #b45309; font-weight: 600; }
+.za-risk-low { color: #15803d; font-weight: 600; }
+.za-risk-mid { color: #b45309; font-weight: 600; }
+.za-risk-high { color: #b91c1c; font-weight: 600; }
 #zotero-assistant-sidebar details {
   margin-top: 8px;
   border: 1px solid var(--za-border);
