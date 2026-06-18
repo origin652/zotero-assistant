@@ -10,11 +10,11 @@
     "96": "icons/zotero-assistant-icon-96.png",
     "128": "icons/zotero-assistant-icon-128.png"
   },
-  "homepage_url": "https://example.com/zotero-assistant",
+  "homepage_url": "https://github.com/origin652/zotero-assistant",
   "applications": {
     "zotero": {
-      "id": "zotero-assistant@example.com",
-      "update_url": "https://example.com/zotero-assistant/updates.json",
+      "id": "zotero-assistant@origin652.github.io",
+      "update_url": "https://github.com/origin652/zotero-assistant/releases/latest/download/updates.json",
       "strict_min_version": "9.0",
       "strict_max_version": "9.0.*"
     }

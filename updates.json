@@ -1,0 +1,12 @@
+{
+  "addons": {
+    "zotero-assistant@origin652.github.io": {
+      "updates": [
+        {
+          "version": "0.1.0",
+          "update_link": "https://github.com/origin652/zotero-assistant/releases/download/v0.1.0/zotero-assistant.xpi"
+        }
+      ]
+    }
+  }
+}
