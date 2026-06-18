@@ -104,10 +104,7 @@ var ZoteroAssistantPluginCore = (() => {
 
   render(state) {
     this.renderChatPanel(state);
-    this.renderStatus(state);
-    this.renderGrantState(state);
-    this.renderApprovals(state);
-    this.renderLog(state);
+    this.renderChatDrawer(state);
     this.renderApprovalPopup(state);
   },
 
@@ -204,6 +201,9 @@ var ZoteroAssistantPluginCore = (() => {
       chatOpen: false,
       chatMinimized: false,
       chatBounds: null,
+      chatDrawerBounds: null,
+      chatDrawerFollowChat: true,
+      chatDrawerDragging: null,
       chatNotice: "",
       chatDragging: null,
       uiOverlayRoot: null,
@@ -224,8 +224,6 @@ var ZoteroAssistantPluginCore = (() => {
     };
     state.menuItem = this.addToolsMenuItem(win);
     this.ensureUiOverlayRoot(state);
-    state.launcher = this.createLauncher(win, state);
-    state.container = this.createSidebar(win, state);
     state.chatLauncher = this.createChatLauncher(win, state);
     state.chatPanel = this.createChatPanel(win, state);
     state.onResize = () => {
@@ -233,8 +231,8 @@ var ZoteroAssistantPluginCore = (() => {
         return;
       }
       state.chatBounds = this.clampChatBounds(state, state.chatBounds);
-      this.avoidSidebarOverlapForChat(state);
       this.applyChatBounds(state);
+      this.positionChatDrawer(state);
     };
     win.addEventListener("resize", state.onResize);
     this.installSelectionAskShortcut(state);

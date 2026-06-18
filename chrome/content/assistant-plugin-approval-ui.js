@@ -79,8 +79,18 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   } = ZoteroAssistantUtil;
 
   return {
+  sidebarPanelBody(state, panelNode) {
+    if (!state || !panelNode || typeof panelNode.querySelector !== "function") {
+      return null;
+    }
+    return panelNode.querySelector(".zotero-assistant-panel-body");
+  },
+
   renderLog(state) {
-    const body = state.logNode.querySelector(".zotero-assistant-panel-body");
+    const body = this.sidebarPanelBody(state, state.logNode);
+    if (!body) {
+      return;
+    }
     body.textContent = "";
     const recent = this.eventLog.slice(-8).reverse();
     if (!recent.length) {
@@ -120,8 +130,19 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   },
 
   showMessage(state, message) {
-    const body = state.logNode.querySelector(".zotero-assistant-panel-body");
-    const msg = this.el(state.doc, "div", "", message);
+    if (!state) {
+      return;
+    }
+    const text = String(message || "");
+    const body = this.sidebarPanelBody(state, state.logNode);
+    if (!body) {
+      state.chatNotice = text;
+      if (state.chatOpen) {
+        this.renderChatPanel(state);
+      }
+      return;
+    }
+    const msg = this.el(state.doc, "div", "", text);
     msg.style.cssText = "padding:10px 12px;background:rgba(255,251,235,0.95);border:1px solid rgba(245,158,11,0.28);border-radius:8px;margin-bottom:8px;white-space:pre-wrap;font-size:12px;line-height:1.45;";
     body.insertBefore(msg, body.firstChild);
   },
@@ -137,7 +158,10 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   },
 
   renderStatus(state) {
-    const body = state.statusNode.querySelector(".zotero-assistant-panel-body");
+    const body = this.sidebarPanelBody(state, state.statusNode);
+    if (!body) {
+      return;
+    }
     body.textContent = "";
     if (!this.task) {
       const empty = this.el(state.doc, "p", "za-empty", "");
@@ -403,7 +427,10 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   },
 
   renderApprovals(state) {
-    const body = state.approvalsNode.querySelector(".zotero-assistant-panel-body");
+    const body = this.sidebarPanelBody(state, state.approvalsNode);
+    if (!body) {
+      return;
+    }
     body.textContent = "";
     if (!this.task || !this.task.pendingApproval) {
       body.appendChild(this.el(state.doc, "p", "za-empty", "无待授权操作。"));
@@ -478,7 +505,10 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   },
 
   renderGrantState(state) {
-    const body = state.grantNode.querySelector(".zotero-assistant-panel-body");
+    const body = this.sidebarPanelBody(state, state.grantNode);
+    if (!body) {
+      return;
+    }
     body.textContent = "";
     const activeLibraryID = this.getActiveLibraryID(state.win);
     const activeLibraryName = this.getLibraryName(activeLibraryID);

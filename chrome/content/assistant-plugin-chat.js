@@ -22,6 +22,8 @@ var ZoteroAssistantPluginChat = (() => {
     CHAT_MIN_HEIGHT,
     CHAT_DEFAULT_WIDTH,
     CHAT_DEFAULT_HEIGHT,
+    CHAT_DRAWER_WIDTH,
+    CHAT_DRAWER_LOG_PREVIEW,
     MAX_CHAT_DISPLAY_LOG,
     MAX_CHAT_DISPLAY_CHARS,
     COMPRESSED_CONTEXT_MARKER,
@@ -87,6 +89,10 @@ var ZoteroAssistantPluginChat = (() => {
     }
     state.chatOpen = false;
     state.chatPanel.style.setProperty("display", "none", "important");
+    if (state.chatDrawerOpen && state.chatDrawerNode) {
+      state.chatDrawerOpen = false;
+      state.chatDrawerNode.style.setProperty("display", "none", "important");
+    }
     if (state.chatLauncher) {
       state.chatLauncher.style.setProperty("display", "flex", "important");
     }
@@ -107,23 +113,39 @@ var ZoteroAssistantPluginChat = (() => {
     if (state.approvalPopup) {
       this.hidePopup(state.approvalPopup);
     }
-    this.avoidSidebarOverlapForChat(state);
     this.applyChatBounds(state);
+    this.positionChatDrawer(state);
     this.renderChatPanel(state);
     if (state.chatInputNode && !state.chatMinimized) {
       state.chatInputNode.focus();
     }
   },
 
-  showChatNotice(state, message) {
-    if (state) {
-      state.chatNotice = String(message || "");
+  toggleChatPanel(state) {
+    if (!state || !state.chatPanel) {
+      return;
+    }
+    if (state.chatOpen) {
+      this.hideChatPanel(state);
+    } else {
       this.showChatPanel(state);
-      this.renderChatPanel(state);
     }
-    if (state && state.logNode) {
-      this.showMessage(state, message);
+  },
+
+  toggleChatPanelForWindow(win) {
+    const state = this.windows.get(win);
+    if (state) {
+      this.toggleChatPanel(state);
     }
+  },
+
+  showChatNotice(state, message) {
+    if (!state) {
+      return;
+    }
+    state.chatNotice = String(message || "");
+    this.showChatPanel(state);
+    this.renderChatPanel(state);
   },
 
   isChatTaskBusy() {
@@ -697,6 +719,10 @@ var ZoteroAssistantPluginChat = (() => {
     titleWrap.appendChild(this.el(doc, "div", "za-floating-chat-title", "Zotero 助手"));
     titleWrap.appendChild(this.el(doc, "div", "za-floating-chat-subtitle", "聊天式任务入口"));
     const actions = this.el(doc, "div", "za-floating-chat-actions", "");
+    actions.appendChild(this.actionButton(doc, "设置", "ghost", () => this.openPreferencesPane()));
+    const manage = this.actionButton(doc, "管理", "ghost", () => this.toggleChatDrawer(state));
+    manage.setAttribute("data-za-chat-drawer-toggle", "1");
+    actions.appendChild(manage);
     const minimize = this.actionButton(doc, "最小化", "ghost", () => this.toggleMinimizeChatPanel(state));
     minimize.setAttribute("data-za-chat-minimize", "1");
     actions.appendChild(minimize);
@@ -704,6 +730,10 @@ var ZoteroAssistantPluginChat = (() => {
     header.appendChild(titleWrap);
     header.appendChild(actions);
     this.attachChatDragHandlers(state, header);
+
+    const drawer = this.createChatDrawer(win, state);
+    state.chatDrawerNode = drawer;
+    state.chatDrawerOpen = false;
 
     const messages = this.el(doc, "div", "za-floating-chat-messages", "");
     messages.style.cssText = "flex:1 1 auto;min-height:0;padding:14px 12px;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:14px;background:#e9ebef;";
@@ -732,7 +762,9 @@ var ZoteroAssistantPluginChat = (() => {
     panel.appendChild(footer);
     panel.appendChild(resizeHandle);
     this.attachChatResizeHandlers(state, resizeHandle);
-    this.ensureUiOverlayRoot(state).appendChild(panel);
+    const overlay = this.ensureUiOverlayRoot(state);
+    overlay.appendChild(panel);
+    overlay.appendChild(drawer);
 
     state.chatHeaderNode = header;
     state.chatMessagesNode = messages;
@@ -741,6 +773,309 @@ var ZoteroAssistantPluginChat = (() => {
     state.chatFooterNode = footer;
     state.chatSendButton = send;
     return panel;
+  },
+
+  createChatDrawer(win, state) {
+    const doc = win.document;
+    const drawer = this.el(doc, "div", "za-chat-drawer", "");
+    drawer.style.cssText = [
+      "display:none",
+      "position:absolute",
+      "box-sizing:border-box",
+      "flex-direction:column",
+      "pointer-events:auto",
+      "z-index:6",
+      "min-width:0",
+      "min-height:0",
+      "background:#ffffff",
+      "border:1px solid #d8dde6",
+      "border-radius:12px",
+      "box-shadow:0 12px 40px rgba(15,23,42,0.16)",
+      "overflow:hidden"
+    ].join(";");
+    drawer.style.setProperty("display", "none", "important");
+    drawer.style.setProperty("position", "absolute", "important");
+
+    const header = this.el(doc, "div", "za-chat-drawer-header", "");
+    header.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid #e2e5ea;background:#f0f2f5;flex:0 0 auto;cursor:move;";
+    header.appendChild(this.el(doc, "div", "za-chat-drawer-title", "管理"));
+    header.appendChild(this.actionButton(doc, "收起", "ghost", () => this.toggleChatDrawer(state)));
+    this.attachChatDrawerDragHandlers(state, header);
+    drawer.appendChild(header);
+    state.chatDrawerHeaderNode = header;
+
+    const body = this.el(doc, "div", "za-chat-drawer-body", "");
+    body.style.cssText = "flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:14px;";
+    const statusSection = this.el(doc, "div", "za-chat-drawer-section", "");
+    statusSection.appendChild(this.el(doc, "div", "za-chat-drawer-section-title", "任务状态"));
+    const statusBody = this.el(doc, "div", "za-chat-drawer-section-body", "");
+    statusSection.appendChild(statusBody);
+    body.appendChild(statusSection);
+
+    const logSection = this.el(doc, "div", "za-chat-drawer-section", "");
+    logSection.appendChild(this.el(doc, "div", "za-chat-drawer-section-title", "执行日志"));
+    const logBody = this.el(doc, "div", "za-chat-drawer-section-body", "");
+    logSection.appendChild(logBody);
+    body.appendChild(logSection);
+
+    const grantDetails = this.html(doc, "details");
+    grantDetails.className = "za-chat-drawer-grant";
+    const grantSummary = this.html(doc, "summary");
+    grantSummary.textContent = "授权与会话";
+    grantDetails.appendChild(grantSummary);
+    const grantBody = this.el(doc, "div", "za-chat-drawer-section-body", "");
+    grantDetails.appendChild(grantBody);
+    body.appendChild(grantDetails);
+
+    drawer.appendChild(body);
+
+    state.chatDrawerStatusBody = statusBody;
+    state.chatDrawerLogBody = logBody;
+    state.chatDrawerGrantBody = grantBody;
+    state.chatDrawerLogExpanded = false;
+    return drawer;
+  },
+
+  chatDrawerHeightForState(state) {
+    const chat = state.chatBounds || this.defaultChatBounds(state);
+    return state.chatMinimized ? CHAT_MINIMIZED_HEIGHT : chat.height;
+  },
+
+  chatDrawerBoundsBesideChat(state) {
+    const chat = state.chatBounds || this.defaultChatBounds(state);
+    return {
+      left: chat.left + chat.width + 8,
+      top: chat.top,
+      width: CHAT_DRAWER_WIDTH,
+      height: this.chatDrawerHeightForState(state)
+    };
+  },
+
+  clampChatDrawerBounds(state, bounds) {
+    const win = state.win;
+    const viewportWidth = Math.max(320, Number(win.innerWidth || state.doc.documentElement.clientWidth || 1024));
+    const viewportHeight = Math.max(320, Number(win.innerHeight || state.doc.documentElement.clientHeight || 768));
+    const width = CHAT_DRAWER_WIDTH;
+    const maxH = Math.max(CHAT_MIN_HEIGHT, viewportHeight - 32);
+    const height = Math.min(
+      Math.max(Number(bounds.height || this.chatDrawerHeightForState(state)), CHAT_MIN_HEIGHT),
+      maxH
+    );
+    return {
+      left: Math.max(16, Math.min(Number(bounds.left || 16), viewportWidth - width - 16)),
+      top: Math.max(16, Math.min(Number(bounds.top || 16), viewportHeight - height - 16)),
+      width,
+      height
+    };
+  },
+
+  applyChatDrawerBounds(state) {
+    if (!state.chatDrawerNode || !state.chatDrawerOpen) {
+      return;
+    }
+    let bounds;
+    if (state.chatDrawerFollowChat !== false) {
+      bounds = this.clampChatDrawerBounds(state, this.chatDrawerBoundsBesideChat(state));
+    } else {
+      bounds = this.clampChatDrawerBounds(state, state.chatDrawerBounds || this.chatDrawerBoundsBesideChat(state));
+      bounds.height = this.chatDrawerHeightForState(state);
+      bounds = this.clampChatDrawerBounds(state, bounds);
+    }
+    state.chatDrawerBounds = bounds;
+    const drawer = state.chatDrawerNode;
+    drawer.style.left = `${Math.round(bounds.left)}px`;
+    drawer.style.top = `${Math.round(bounds.top)}px`;
+    drawer.style.width = `${Math.round(bounds.width)}px`;
+    drawer.style.height = `${Math.round(bounds.height)}px`;
+  },
+
+  positionChatDrawer(state) {
+    if (!state.chatDrawerNode || !state.chatPanel || !state.chatOpen || !state.chatDrawerOpen) {
+      return;
+    }
+    this.applyChatDrawerBounds(state);
+  },
+
+  toggleChatDrawer(state) {
+    if (!state || !state.chatDrawerNode) {
+      return;
+    }
+    state.chatDrawerOpen = !state.chatDrawerOpen;
+    if (state.chatDrawerOpen) {
+      if (!state.chatBounds) {
+        state.chatBounds = this.defaultChatBounds(state);
+      }
+      if (state.chatDrawerBounds == null) {
+        state.chatDrawerFollowChat = true;
+      }
+      state.chatDrawerNode.style.setProperty("display", "flex", "important");
+      this.positionChatDrawer(state);
+    } else {
+      state.chatDrawerNode.style.setProperty("display", "none", "important");
+    }
+    this.renderChatDrawer(state);
+  },
+
+  renderChatDrawer(state) {
+    if (!state || !state.chatDrawerNode) {
+      return;
+    }
+    if (!state.chatDrawerOpen) {
+      return;
+    }
+    this.drawerStatus(state);
+    this.drawerLog(state);
+    this.drawerGrant(state);
+  },
+
+  drawerStatus(state) {
+    const body = state.chatDrawerStatusBody;
+    if (!body) {
+      return;
+    }
+    body.textContent = "";
+    const doc = state.doc;
+    if (!this.task) {
+      body.appendChild(this.el(doc, "p", "za-empty", "暂无任务。在下方输入明确任务后开始。"));
+      return;
+    }
+    const row = this.html(doc, "div");
+    row.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;";
+    row.appendChild(this.el(doc, "span", `za-pill ${this.statusPillClass(this.task.status)}`, this.task.status));
+    row.appendChild(this.el(doc, "span", "za-muted", `阶段 · ${this.task.phase}`));
+    body.appendChild(row);
+    if (this.task.error) {
+      body.appendChild(this.el(doc, "div", "za-error", `错误：${this.task.error}`));
+    }
+    if (this.task.libraryName) {
+      const lib = this.el(doc, "div", "za-muted", `绑定库：${this.task.libraryName}`);
+      lib.style.marginTop = "6px";
+      body.appendChild(lib);
+    }
+    const actions = this.el(doc, "div", "za-btn-row", "");
+    if (this.task.canContinueAfterCompressionFailure) {
+      actions.appendChild(this.actionButton(doc, "裁剪后继续", "primary", () => this.continueAfterCompressionFailure()));
+    }
+    actions.appendChild(this.actionButton(doc, "清除任务", "ghost", () => this.clearCurrentTask()));
+    const undoButton = this.actionButton(doc, "撤销最近", "secondary", () => this.undoLast());
+    undoButton.disabled = this.undoStack.length === 0;
+    actions.appendChild(undoButton);
+    body.appendChild(actions);
+  },
+
+  drawerLog(state) {
+    const body = state.chatDrawerLogBody;
+    if (!body) {
+      return;
+    }
+    body.textContent = "";
+    const doc = state.doc;
+    const all = this.eventLog.slice().reverse();
+    const previewCount = CHAT_DRAWER_LOG_PREVIEW;
+    const showCount = state.chatDrawerLogExpanded ? Math.min(all.length, MAX_CHAT_DISPLAY_LOG) : Math.min(all.length, previewCount);
+    const shown = all.slice(0, showCount);
+    if (!shown.length) {
+      body.appendChild(this.el(doc, "p", "za-empty", "暂无日志。"));
+    } else {
+      for (const event of shown) {
+        const formatted = this.formatLogEvent(event);
+        const line = this.el(doc, "div", `za-log-line za-log-tone-${formatted.tone || "neutral"}`, "");
+        line.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-bottom:1px solid var(--za-border, #e2e5ea);";
+        const head = this.el(doc, "div", "", "");
+        head.style.cssText = "display:flex;gap:6px;align-items:baseline;";
+        head.appendChild(this.el(doc, "span", "za-log-type", formatted.badge || ""));
+        head.appendChild(this.el(doc, "span", "", formatted.title || ""));
+        line.appendChild(head);
+        if (formatted.detail) {
+          const detail = this.el(doc, "div", "za-muted", formatted.detail);
+          detail.style.cssText = "font-size:11px;";
+          line.appendChild(detail);
+        }
+        body.appendChild(line);
+      }
+    }
+    const row = this.el(doc, "div", "za-btn-row", "");
+    row.style.marginTop = "8px";
+    if (all.length > previewCount) {
+      row.appendChild(this.actionButton(doc, state.chatDrawerLogExpanded ? "收起日志" : "展开全部", "ghost", () => {
+        state.chatDrawerLogExpanded = !state.chatDrawerLogExpanded;
+        this.drawerLog(state);
+      }));
+    }
+    row.appendChild(this.actionButton(doc, "清除日志", "ghost", () => {
+      this.eventLog = [];
+      this.persistLog();
+      this.renderChatDrawer(state);
+    }));
+    body.appendChild(row);
+  },
+
+  drawerGrant(state) {
+    const body = state.chatDrawerGrantBody;
+    if (!body) {
+      return;
+    }
+    body.textContent = "";
+    const doc = state.doc;
+    const activeLibraryID = this.getActiveLibraryID(state.win);
+    const activeLibraryName = this.getLibraryName(activeLibraryID);
+    const activeGranted = this.hasSessionReadGrant(activeLibraryID);
+    body.appendChild(this.el(doc, "div", "", `界面库：${activeLibraryName}`));
+    const grantLine = this.el(
+      doc,
+      "div",
+      activeGranted ? "za-grant-on" : "za-grant-off",
+      activeGranted ? "整库元数据读取 · 已开放" : "整库元数据读取 · 未开放"
+    );
+    grantLine.style.marginTop = "6px";
+    body.appendChild(grantLine);
+    if (activeGranted) {
+      const row = this.el(doc, "div", "za-btn-row", "");
+      row.style.marginTop = "6px";
+      row.appendChild(this.actionButton(doc, "收回整库读取", "secondary", () => this.revokeSessionRead(activeLibraryID)));
+      body.appendChild(row);
+    }
+
+    body.appendChild(this.el(doc, "div", "za-muted", "本库会话记忆")).style.marginTop = "10px";
+    if (!this.isSessionMemoryEnabled()) {
+      const disabled = this.el(doc, "div", "za-grant-off", "会话记忆 · 已在设置中关闭");
+      disabled.style.marginTop = "6px";
+      body.appendChild(disabled);
+    } else {
+      const memory = this.getSessionMemory(activeLibraryID);
+      if (!memory || !memory.summary) {
+        const emptyMemory = this.el(doc, "div", "za-grant-off", "本库暂无会话摘要");
+        emptyMemory.style.marginTop = "6px";
+        body.appendChild(emptyMemory);
+      } else {
+        const line = this.el(doc, "div", "za-grant-on", `已记录 · ${memory.summary.length} 字符 · 版本 ${memory.version || 1}`);
+        line.style.marginTop = "6px";
+        body.appendChild(line);
+        const memActions = this.el(doc, "div", "za-btn-row", "");
+        memActions.style.marginTop = "6px";
+        memActions.appendChild(this.actionButton(doc, "复制摘要", "secondary", () => this.copySessionMemoryForLibrary(activeLibraryID)));
+        memActions.appendChild(this.actionButton(doc, "清除记忆", "ghost", () => this.clearSessionMemoryForLibrary(activeLibraryID)));
+        body.appendChild(memActions);
+      }
+    }
+
+    body.appendChild(this.el(doc, "div", "za-muted", "设置前缀授权")).style.marginTop = "10px";
+    const prefixes = Array.from(this.sessionPreferenceApprovals).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+    if (!prefixes.length) {
+      const emptyPrefs = this.el(doc, "div", "za-grant-off", "本会话暂无设置写入前缀授权");
+      emptyPrefs.style.marginTop = "6px";
+      body.appendChild(emptyPrefs);
+    }
+    for (const prefix of prefixes) {
+      const line = this.el(doc, "div", "za-grant-on", prefix);
+      line.style.marginTop = "6px";
+      line.style.wordBreak = "break-all";
+      body.appendChild(line);
+      const row = this.el(doc, "div", "za-btn-row", "");
+      row.style.marginTop = "6px";
+      row.appendChild(this.actionButton(doc, "收回此前缀", "secondary", () => this.revokePreferencePrefix(prefix)));
+      body.appendChild(row);
+    }
   },
 
   applyChatBounds(state) {
@@ -755,6 +1090,7 @@ var ZoteroAssistantPluginChat = (() => {
     state.chatPanel.style.height = state.chatMinimized
       ? `${CHAT_MINIMIZED_HEIGHT}px`
       : `${Math.round(bounds.height)}px`;
+    this.positionChatDrawer(state);
   },
 
   renderChatPanel(state) {
@@ -1129,6 +1465,18 @@ var ZoteroAssistantPluginChat = (() => {
       }
     }
     card.appendChild(summary);
+    if (pending.details) {
+      const details = this.html(state.doc, "details");
+      details.style.marginTop = "6px";
+      const detailsSummary = this.html(state.doc, "summary");
+      detailsSummary.textContent = "查看详情";
+      const pre = this.html(state.doc, "pre");
+      pre.textContent = pending.details;
+      pre.style.cssText = "white-space:pre-wrap;word-break:break-all;font-size:11px;margin:6px 0 0;max-height:180px;overflow:auto;";
+      details.appendChild(detailsSummary);
+      details.appendChild(pre);
+      card.appendChild(details);
+    }
     card.appendChild(buttons);
     body.appendChild(card);
   },
@@ -1173,6 +1521,46 @@ var ZoteroAssistantPluginChat = (() => {
     card.appendChild(detail);
     card.appendChild(buttons);
     body.appendChild(card);
+  },
+
+  attachChatDrawerDragHandlers(state, header) {
+    header.addEventListener("mousedown", (event) => {
+      const target = event.target;
+      const onButton = target && typeof target.closest === "function" && target.closest("button");
+      if (event.button !== 0 || onButton) {
+        return;
+      }
+      event.preventDefault();
+      state.chatDrawerFollowChat = false;
+      const bounds = state.chatDrawerBounds || this.chatDrawerBoundsBesideChat(state);
+      state.chatDrawerDragging = {
+        startX: event.clientX,
+        startY: event.clientY,
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height
+      };
+      const onMove = (moveEvent) => {
+        if (!state.chatDrawerDragging) {
+          return;
+        }
+        state.chatDrawerBounds = this.clampChatDrawerBounds(state, {
+          left: state.chatDrawerDragging.left + moveEvent.clientX - state.chatDrawerDragging.startX,
+          top: state.chatDrawerDragging.top + moveEvent.clientY - state.chatDrawerDragging.startY,
+          width: state.chatDrawerDragging.width,
+          height: state.chatDrawerDragging.height
+        });
+        this.applyChatDrawerBounds(state);
+      };
+      const onUp = () => {
+        state.chatDrawerDragging = null;
+        state.win.removeEventListener("mousemove", onMove, true);
+        state.win.removeEventListener("mouseup", onUp, true);
+      };
+      state.win.addEventListener("mousemove", onMove, true);
+      state.win.addEventListener("mouseup", onUp, true);
+    });
   },
 
   attachChatDragHandlers(state, header) {
@@ -1221,7 +1609,7 @@ var ZoteroAssistantPluginChat = (() => {
       this.log("task.loop.skipped_reentrant", { id: this.task.id });
       this.task.status = "paused";
       this.task.phase = "loop_busy";
-      this.task.error = "任务循环未结束，无法再次启动。请稍候或侧边栏「清除当前任务」。";
+      this.task.error = "任务循环未结束，无法再次启动。请稍候，或点聊天 header 的「管理」→「清除任务」。";
       this.showChatNotice(state, this.task.error);
       this.renderAll();
       return;
@@ -1264,7 +1652,7 @@ var ZoteroAssistantPluginChat = (() => {
     this.repairOrphanRunningTask();
     if (this.task && this.task.status === "running") {
       this.appendChatDisplay("user", taskText);
-      this.showChatNotice(state, "已有任务正在运行，这条已记在聊天里。请等待当前任务结束，或在侧边栏「清除当前任务」后再发新任务。");
+      this.showChatNotice(state, "已有任务正在运行，这条已记在聊天里。请等待当前任务结束，或点「管理」→「清除任务」后再发新任务。");
       this.scheduleChatRepaint(state);
       return false;
     }
@@ -1366,6 +1754,7 @@ var ZoteroAssistantPluginChat = (() => {
     }
     state.chatMinimized = !state.chatMinimized;
     this.applyChatBounds(state);
+    this.positionChatDrawer(state);
     this.renderChatPanel(state);
   },
 

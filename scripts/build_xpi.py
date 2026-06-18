@@ -9,6 +9,11 @@ OUT_FILE = BUILD_DIR / "zotero-assistant.xpi"
 INCLUDED = [
     "manifest.json",
     "bootstrap.js",
+    "icons/zotero-assistant-icon-16.png",
+    "icons/zotero-assistant-icon-32.png",
+    "icons/zotero-assistant-icon-48.png",
+    "icons/zotero-assistant-icon-96.png",
+    "icons/zotero-assistant-icon-128.png",
     "chrome/content/preferences.xhtml",
     "chrome/content/assistant-constants.js",
     "chrome/content/assistant-util.js",

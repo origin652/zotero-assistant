@@ -260,7 +260,7 @@ var ZoteroAssistantPluginSidebar = (() => {
     const item = doc.createXULElement ? doc.createXULElement("menuitem") : doc.createElement("menuitem");
     item.setAttribute("id", "zotero-assistant-tools-menu");
     item.setAttribute("label", "Zotero 助手");
-    item.addEventListener("command", () => this.toggleSidebar(win));
+    item.addEventListener("command", () => this.toggleChatPanelForWindow(win));
     toolsMenu.appendChild(item);
     return item;
   },

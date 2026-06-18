@@ -415,6 +415,56 @@ var ZoteroAssistantStyles = (() => {
   background: linear-gradient(135deg, transparent 50%, rgba(100,116,139,0.35) 50%) !important;
   border-bottom-right-radius: 12px !important;
 }
+.za-chat-drawer {
+  font-family: system-ui, 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+  font-size: 12px;
+  color: #1f2937;
+}
+.za-chat-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.za-chat-drawer-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+.za-chat-drawer-section-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #334155;
+  margin-bottom: 6px;
+}
+.za-chat-drawer-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.za-chat-drawer-grant {
+  border: 1px solid #e2e5ea;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.za-chat-drawer-grant > summary {
+  font-weight: 600;
+  font-size: 12px;
+  color: #334155;
+  cursor: pointer;
+}
+.za-chat-drawer .za-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.za-chat-drawer .za-log-line {
+  border-radius: 6px;
+}
+.za-log-tone-success .za-log-type { color: #15803d; }
+.za-log-tone-info .za-log-type { color: #1d4ed8; }
+.za-log-tone-warning .za-log-type { color: #b45309; }
+.za-log-tone-danger .za-log-type { color: #b91c1c; }
+.za-log-tone-neutral .za-log-type { color: #475569; }
 #zotero-assistant-chat-panel .za-chat-notice,
 #zotero-assistant-chat-panel .za-chat-empty {
   align-self: center !important;
