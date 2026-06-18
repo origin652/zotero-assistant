@@ -7,6 +7,7 @@ var ZoteroAssistantPluginCore = (() => {
     DEFAULT_MODEL,
     DEFAULT_API_MODE,
     DEFAULT_SAFETY_MODE,
+    DEFAULT_SELECTION_ASK_SHORTCUT,
     DEFAULT_SESSION_MEMORY_ENABLED,
     DEFAULT_AUTO_COMPRESSION_ENABLED,
     DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS,
@@ -31,6 +32,7 @@ var ZoteroAssistantPluginCore = (() => {
     MAX_COLLECTIONS_PER_MODEL_ROUND,
     MAX_ITEMS_PER_MODEL_ROUND,
     MAX_CONTEXT_SELECTED_ITEMS,
+    SELECTION_ASK_MAX_CHARS,
     MAX_TASK_LOOPS,
     DEFAULT_BROWSE_PAGE_SIZE,
     MAX_BROWSE_PAGE_SIZE,
@@ -158,6 +160,7 @@ var ZoteroAssistantPluginCore = (() => {
     this.setDefault(PREFS.eventLog, "[]");
     this.setDefault(PREFS.braveSearchApiKey, "");
     this.setDefault(PREFS.webSearchProvider, "auto");
+    this.setDefault(PREFS.selectionAskShortcut, DEFAULT_SELECTION_ASK_SHORTCUT);
     this.setDefault(PREFS.sessionMemoryEnabled, DEFAULT_SESSION_MEMORY_ENABLED);
     this.setDefault(PREFS.autoCompressionEnabled, DEFAULT_AUTO_COMPRESSION_ENABLED);
     this.setDefault(PREFS.contextCompressionTriggerChars, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS);
@@ -208,6 +211,12 @@ var ZoteroAssistantPluginCore = (() => {
       logPopup: null,
       logPopupTimer: null,
       lastLogPopupKey: "",
+      onSelectionAskKeydown: null,
+      selectionAskShortcutTargets: [],
+      selectionAskShortcutTimer: null,
+      selectionAskShortcutSyncing: false,
+      pendingSelectionAskDraft: null,
+      activeSelectionAskDraftMeta: null,
       inputNode: null,
       sendButton: null
     };
@@ -226,6 +235,7 @@ var ZoteroAssistantPluginCore = (() => {
       this.applyChatBounds(state);
     };
     win.addEventListener("resize", state.onResize);
+    this.installSelectionAskShortcut(state);
     this.windows.set(win, state);
     this.render(state);
   },
@@ -367,6 +377,7 @@ var ZoteroAssistantPluginCore = (() => {
       win.removeEventListener("resize", state.onResize);
       state.onResize = null;
     }
+    this.uninstallSelectionAskShortcut(state);
     if (state.menuItem && state.menuItem.parentNode) {
       state.menuItem.parentNode.removeChild(state.menuItem);
     }

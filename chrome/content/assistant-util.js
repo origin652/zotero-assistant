@@ -1,4 +1,5 @@
 var ZoteroAssistantUtil = (() => {
+  const DEFAULT_DEBUG_TEXT_LIMIT = 16000;
   function safeCall(fn) {
     try {
       const value = fn();
@@ -23,7 +24,7 @@ var ZoteroAssistantUtil = (() => {
     return text.slice(0, limit) + "...";
   }
 
-  function safeJSONStringify(value, limit = DEBUG_TEXT_LIMIT) {
+  function safeJSONStringify(value, limit = DEFAULT_DEBUG_TEXT_LIMIT) {
     try {
       const seen = new WeakSet();
       const text = JSON.stringify(value, (key, current) => {

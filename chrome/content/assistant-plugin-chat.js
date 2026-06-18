@@ -7,6 +7,7 @@ var ZoteroAssistantPluginChat = (() => {
     DEFAULT_MODEL,
     DEFAULT_API_MODE,
     DEFAULT_SAFETY_MODE,
+    DEFAULT_SELECTION_ASK_SHORTCUT,
     DEFAULT_SESSION_MEMORY_ENABLED,
     DEFAULT_AUTO_COMPRESSION_ENABLED,
     DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS,
@@ -31,6 +32,7 @@ var ZoteroAssistantPluginChat = (() => {
     MAX_COLLECTIONS_PER_MODEL_ROUND,
     MAX_ITEMS_PER_MODEL_ROUND,
     MAX_CONTEXT_SELECTED_ITEMS,
+    SELECTION_ASK_MAX_CHARS,
     MAX_TASK_LOOPS,
     DEFAULT_BROWSE_PAGE_SIZE,
     MAX_BROWSE_PAGE_SIZE,
@@ -140,6 +142,483 @@ var ZoteroAssistantPluginChat = (() => {
     } catch (error) {
       return {};
     }
+  },
+
+  installSelectionAskShortcut(state) {
+    if (!state || !state.win || state.onSelectionAskKeydown) {
+      return;
+    }
+    state.selectionAskShortcutTargets = [];
+    state.onSelectionAskKeydown = (event) => {
+      this.handleSelectionAskShortcut(state, event).catch((error) => {
+        Zotero.debug(`Zotero Assistant selection ask shortcut failed: ${error}`);
+      });
+    };
+    this.addSelectionAskShortcutTarget(state, state.win);
+    this.syncSelectionAskShortcutTargets(state);
+    state.selectionAskShortcutTimer = state.win.setInterval(() => {
+      this.syncSelectionAskShortcutTargets(state);
+    }, 1500);
+  },
+
+  uninstallSelectionAskShortcut(state) {
+    if (!state) {
+      return;
+    }
+    if (state.selectionAskShortcutTimer && state.win) {
+      state.win.clearInterval(state.selectionAskShortcutTimer);
+      state.selectionAskShortcutTimer = null;
+    }
+    const targets = Array.isArray(state.selectionAskShortcutTargets) ? state.selectionAskShortcutTargets : [];
+    for (const targetWin of targets) {
+      try {
+        targetWin.removeEventListener("keydown", state.onSelectionAskKeydown, true);
+      } catch (error) {
+        // Ignore stale reader frames during Zotero tab teardown.
+      }
+    }
+    state.selectionAskShortcutTargets = [];
+    state.onSelectionAskKeydown = null;
+    state.pendingSelectionAskDraft = null;
+    state.activeSelectionAskDraftMeta = null;
+  },
+
+  addSelectionAskShortcutTarget(state, targetWin) {
+    if (!state || !state.onSelectionAskKeydown || !targetWin || targetWin.closed) {
+      return;
+    }
+    if (!Array.isArray(state.selectionAskShortcutTargets)) {
+      state.selectionAskShortcutTargets = [];
+    }
+    if (state.selectionAskShortcutTargets.includes(targetWin)) {
+      return;
+    }
+    try {
+      targetWin.addEventListener("keydown", state.onSelectionAskKeydown, true);
+      state.selectionAskShortcutTargets.push(targetWin);
+    } catch (error) {
+      // Some Zotero internal frames may not allow listeners; skip them.
+    }
+  },
+
+  async syncSelectionAskShortcutTargets(state) {
+    if (!state || !state.win || !state.onSelectionAskKeydown || state.selectionAskShortcutSyncing) {
+      return;
+    }
+    state.selectionAskShortcutSyncing = true;
+    try {
+      const candidates = [];
+      this.collectFrameWindows(state.win, candidates, new Set());
+      try {
+        const tabID = this.selectedZoteroTabID(state.win);
+        const reader = await this.readerForTab(state.win, tabID);
+        if (reader) {
+          for (const readerWin of this.readerWindowCandidates(reader)) {
+            this.collectFrameWindows(readerWin, candidates, new Set());
+          }
+        }
+      } catch (error) {
+        // Reader probing is best effort; shortcut still works in the main window.
+      }
+      for (const candidate of candidates) {
+        this.addSelectionAskShortcutTarget(state, candidate);
+      }
+      state.selectionAskShortcutTargets = (state.selectionAskShortcutTargets || []).filter((targetWin) => {
+        try {
+          return !!targetWin && !targetWin.closed;
+        } catch (error) {
+          return false;
+        }
+      });
+    } finally {
+      state.selectionAskShortcutSyncing = false;
+    }
+  },
+
+  collectFrameWindows(rootWin, output, seen) {
+    if (!rootWin || seen.has(rootWin)) {
+      return;
+    }
+    seen.add(rootWin);
+    output.push(rootWin);
+    let frames = [];
+    try {
+      frames = Array.from(rootWin.frames || []);
+    } catch (error) {
+      frames = [];
+    }
+    for (const frameWin of frames) {
+      this.collectFrameWindows(frameWin, output, seen);
+    }
+  },
+
+  selectionAskShortcutString() {
+    return String(Zotero.Prefs.get(PREFS.selectionAskShortcut, true) || DEFAULT_SELECTION_ASK_SHORTCUT).trim();
+  },
+
+  parseSelectionAskShortcut(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return null;
+    }
+    const parts = raw.split("+").map((part) => part.trim()).filter(Boolean);
+    const shortcut = { ctrl: false, alt: false, shift: false, meta: false, key: "" };
+    for (const part of parts) {
+      const token = part.toLowerCase();
+      if (token === "ctrl" || token === "control") {
+        shortcut.ctrl = true;
+      } else if (token === "alt" || token === "option") {
+        shortcut.alt = true;
+      } else if (token === "shift") {
+        shortcut.shift = true;
+      } else if (token === "meta" || token === "cmd" || token === "command") {
+        shortcut.meta = true;
+      } else {
+        shortcut.key = this.normalizeShortcutKey(part);
+      }
+    }
+    return shortcut.key ? shortcut : null;
+  },
+
+  normalizeShortcutKey(value) {
+    const key = String(value || "").trim();
+    if (!key) {
+      return "";
+    }
+    if (key.length === 1) {
+      return key.toUpperCase();
+    }
+    const lower = key.toLowerCase();
+    if (lower === "space" || lower === "spacebar") {
+      return " ";
+    }
+    return lower;
+  },
+
+  selectionAskShortcutMatchesEvent(event) {
+    const shortcut = this.parseSelectionAskShortcut(this.selectionAskShortcutString());
+    if (!shortcut) {
+      return false;
+    }
+    const eventKey = this.normalizeShortcutKey(event.key || "");
+    return eventKey === shortcut.key &&
+      !!event.ctrlKey === shortcut.ctrl &&
+      !!event.altKey === shortcut.alt &&
+      !!event.shiftKey === shortcut.shift &&
+      !!event.metaKey === shortcut.meta;
+  },
+
+  async handleSelectionAskShortcut(state, event) {
+    if (!state || !event || event.defaultPrevented || event.repeat) {
+      return;
+    }
+    if (!this.selectionAskShortcutMatchesEvent(event)) {
+      return;
+    }
+    if (this.selectionAskEventExcluded(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    await this.syncSelectionAskShortcutTargets(state);
+    state.chatMinimized = false;
+    this.showChatPanel(state);
+
+    const snapshot = await this.readSelectionAskSnapshot(state, event);
+    if (!snapshot.ok) {
+      state.pendingSelectionAskDraft = null;
+      this.log("selection.ask.no_selection", { reason: snapshot.error || "no_selection" });
+      this.showChatNotice(state, "未检测到可提问的选中文本。你可以直接在这里输入问题。");
+      return;
+    }
+    const draft = await this.buildSelectionAskDraft(state, snapshot);
+    this.prepareSelectionAskDraft(state, draft);
+  },
+
+  selectionAskEventExcluded(event) {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    const nodes = path.length ? path : [event.target];
+    return nodes.some((node) => this.nodeIsEditableForSelectionAsk(node) || this.nodeWithinAssistantUI(node));
+  },
+
+  nodeElementForSelectionAsk(node) {
+    if (!node) {
+      return null;
+    }
+    if (node.nodeType === 1) {
+      return node;
+    }
+    return node.parentElement || node.parentNode || null;
+  },
+
+  nodeIsEditableForSelectionAsk(node) {
+    const element = this.nodeElementForSelectionAsk(node);
+    if (!element) {
+      return false;
+    }
+    const tag = String(element.localName || element.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") {
+      return true;
+    }
+    if (element.isContentEditable) {
+      return true;
+    }
+    return !!(typeof element.closest === "function" && element.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
+  },
+
+  nodeWithinAssistantUI(node) {
+    const element = this.nodeElementForSelectionAsk(node);
+    return !!(element && typeof element.closest === "function" && element.closest("#zotero-assistant-ui-root, #zotero-assistant-sidebar"));
+  },
+
+  normalizeSelectionAskText(text) {
+    return String(text || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  },
+
+  selectionSnapshotFromWindow(targetWin) {
+    if (!targetWin || targetWin.closed) {
+      return null;
+    }
+    let selection = null;
+    try {
+      selection = targetWin.getSelection && targetWin.getSelection();
+    } catch (error) {
+      return null;
+    }
+    if (!selection || selection.isCollapsed || !selection.rangeCount) {
+      return null;
+    }
+    if (this.selectionTouchesExcludedNode(selection)) {
+      return null;
+    }
+    const text = this.normalizeSelectionAskText(selection.toString());
+    if (!text) {
+      return null;
+    }
+    return {
+      ok: true,
+      text,
+      win: targetWin,
+      doc: targetWin.document || null,
+      selection
+    };
+  },
+
+  selectionTouchesExcludedNode(selection) {
+    const nodes = [selection.anchorNode, selection.focusNode];
+    try {
+      for (let index = 0; index < selection.rangeCount; index++) {
+        nodes.push(selection.getRangeAt(index).commonAncestorContainer);
+      }
+    } catch (error) {
+      // Ignore partially detached ranges.
+    }
+    return nodes.some((node) => this.nodeIsEditableForSelectionAsk(node) || this.nodeWithinAssistantUI(node));
+  },
+
+  async readSelectionAskSnapshot(state, event) {
+    const candidates = [];
+    if (event && event.view) {
+      candidates.push(event.view);
+    }
+    const targetDoc = event && event.target && event.target.ownerDocument;
+    if (targetDoc && targetDoc.defaultView) {
+      candidates.push(targetDoc.defaultView);
+    }
+    candidates.push(state.win);
+    for (const targetWin of state.selectionAskShortcutTargets || []) {
+      candidates.push(targetWin);
+    }
+    const unique = Array.from(new Set(candidates.filter(Boolean)));
+    for (const targetWin of unique) {
+      const snapshot = this.selectionSnapshotFromWindow(targetWin);
+      if (snapshot) {
+        snapshot.source = await this.describeSelectionAskSource(state, snapshot);
+        return snapshot;
+      }
+    }
+    return { ok: false, error: "没有可读选区，或选区位于输入框、可编辑区域、Zotero 助手界面内。" };
+  },
+
+  async describeSelectionAskSource(state, snapshot) {
+    const fallback = {
+      type: "zotero_window",
+      label: "Zotero 窗口选区",
+      lines: ["来源：Zotero 窗口选区"]
+    };
+    try {
+      const tabID = this.selectedZoteroTabID(state.win);
+      const reader = await this.readerForTab(state.win, tabID);
+      if (reader) {
+        const readerWindows = this.readerWindowCandidates(reader);
+        const isReaderWindow = readerWindows.some((readerWin) => readerWin === snapshot.win || readerWin.document === snapshot.doc);
+        if (isReaderWindow) {
+          const attachment = this.readerAttachmentItem(reader);
+          const owner = attachment ? this.resolveOwningItem(attachment) : null;
+          const pdfApp = this.readerPDFApplication(reader);
+          const pageInfo = this.readerPageInfo(reader, pdfApp);
+          const title = owner
+            ? safeCall(() => owner.getField("title")) || safeCall(() => owner.getDisplayTitle())
+            : attachment
+              ? safeCall(() => attachment.getField("title")) || safeCall(() => attachment.getDisplayTitle())
+              : "";
+          const pageLabel = Number.isInteger(pageInfo.pageIndex) ? this.readerPageLabel(pdfApp, pageInfo.pageIndex) : "";
+          const pageText = pageLabel || (pageInfo.pageNumber ? String(pageInfo.pageNumber) : "");
+          const lines = [
+            `来源：Zotero 阅读器${title ? ` - ${title}` : ""}`,
+            attachment && attachment.key ? `附件 key：${attachment.key}` : "",
+            pageText ? `当前页：${pageText}` : ""
+          ].filter(Boolean);
+          return {
+            type: "reader",
+            label: lines[0],
+            lines,
+            itemKey: owner && owner.key ? owner.key : "",
+            attachmentKey: attachment && attachment.key ? attachment.key : "",
+            pageLabel: pageText
+          };
+        }
+      }
+    } catch (error) {
+      // Fall back to generic Zotero-window metadata.
+    }
+    const title = snapshot.doc && snapshot.doc.title ? String(snapshot.doc.title).trim() : "";
+    if (title) {
+      return {
+        type: "zotero_window",
+        label: `Zotero 窗口选区 - ${title}`,
+        lines: [`来源：Zotero 窗口选区 - ${title}`]
+      };
+    }
+    return fallback;
+  },
+
+  quoteSelectionAskText(text) {
+    return String(text || "")
+      .split(/\n/)
+      .map((line) => `> ${line}`)
+      .join("\n");
+  },
+
+  async buildSelectionAskDraft(state, snapshot) {
+    const original = snapshot.text || "";
+    const clipped = original.length > SELECTION_ASK_MAX_CHARS
+      ? original.slice(0, SELECTION_ASK_MAX_CHARS)
+      : original;
+    const truncated = clipped.length < original.length;
+    const source = snapshot.source || {
+      type: "zotero_window",
+      label: "Zotero 窗口选区",
+      lines: ["来源：Zotero 窗口选区"]
+    };
+    const lines = [
+      "基于这段文字回答：",
+      "",
+      ...source.lines,
+      "",
+      this.quoteSelectionAskText(clipped),
+      "",
+      "我的问题："
+    ];
+    return {
+      text: lines.join("\n"),
+      meta: {
+        sourceType: source.type || "zotero_window",
+        sourceLabel: source.label || "Zotero 窗口选区",
+        itemKey: source.itemKey || "",
+        attachmentKey: source.attachmentKey || "",
+        pageLabel: source.pageLabel || "",
+        originalChars: original.length,
+        includedChars: clipped.length,
+        truncated,
+        createdAt: new Date().toISOString()
+      }
+    };
+  },
+
+  prepareSelectionAskDraft(state, draft) {
+    if (!state || !state.chatInputNode || !draft || !draft.text) {
+      return;
+    }
+    state.chatMinimized = false;
+    this.showChatPanel(state);
+    const existing = String(state.chatInputNode.value || "").trim();
+    const busy = this.isChatTaskBusy();
+    if (existing) {
+      state.pendingSelectionAskDraft = draft;
+      state.chatNotice = busy
+        ? "聊天输入框已有草稿，且当前任务正在运行。请选择如何处理草稿，任务结束后再发送。"
+        : "聊天输入框已有草稿，请选择追加、覆盖或取消。";
+      this.renderChatPanel(state);
+      return;
+    }
+    this.applySelectionAskDraftToInput(state, draft, "replace");
+    const baseNotice = draft.meta.truncated
+      ? `已填入选中文本，原文 ${draft.meta.originalChars} 字符，已截断为 ${draft.meta.includedChars} 字符。`
+      : "已填入选中文本。请补充你的问题后发送。";
+    state.chatNotice = busy
+      ? `${baseNotice} 当前任务正在运行，请等待结束后再发送。`
+      : baseNotice;
+    this.log("selection.ask.prepared", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: false }));
+    this.renderChatPanel(state);
+  },
+
+  applySelectionAskDraftToInput(state, draft, mode) {
+    if (!state || !state.chatInputNode || !draft || !draft.text) {
+      return;
+    }
+    const input = state.chatInputNode;
+    if (mode === "append" && input.value) {
+      const insert = `\n\n${draft.text}`;
+      if (typeof input.selectionStart === "number" && typeof input.selectionEnd === "number") {
+        const start = input.selectionStart;
+        const end = input.selectionEnd;
+        input.value = input.value.slice(0, start) + insert + input.value.slice(end);
+        const cursor = start + insert.length;
+        input.selectionStart = cursor;
+        input.selectionEnd = cursor;
+      } else {
+        input.value = `${input.value}\n\n${draft.text}`;
+      }
+    } else {
+      input.value = draft.text;
+      const cursor = input.value.length;
+      if (typeof input.selectionStart === "number") {
+        input.selectionStart = cursor;
+        input.selectionEnd = cursor;
+      }
+    }
+    state.activeSelectionAskDraftMeta = draft.meta;
+    state.pendingSelectionAskDraft = null;
+    input.focus();
+  },
+
+  selectionAskLogPayload(meta, extra = {}) {
+    const data = Object.assign({
+      sourceType: meta && meta.sourceType || "",
+      sourceLabel: meta && meta.sourceLabel || "",
+      itemKey: meta && meta.itemKey || "",
+      attachmentKey: meta && meta.attachmentKey || "",
+      pageLabel: meta && meta.pageLabel || "",
+      originalChars: meta && meta.originalChars || 0,
+      includedChars: meta && meta.includedChars || 0,
+      truncated: !!(meta && meta.truncated)
+    }, extra);
+    return data;
+  },
+
+  consumeSelectionAskMetaForText(state, text) {
+    if (!state || !state.activeSelectionAskDraftMeta) {
+      return null;
+    }
+    const meta = state.activeSelectionAskDraftMeta;
+    state.activeSelectionAskDraftMeta = null;
+    return String(text || "").includes("基于这段文字回答：") ? meta : null;
   },
 
   clampChatBounds(state, bounds) {
@@ -515,13 +994,15 @@ var ZoteroAssistantPluginChat = (() => {
     if (!text) {
       return;
     }
+    const selectionAskMeta = this.consumeSelectionAskMetaForText(chatState, text);
     if (chatState.chatInputNode) {
       chatState.chatInputNode.value = "";
     }
+    chatState.pendingSelectionAskDraft = null;
     chatState.chatNotice = "";
     this.showChatPanel(chatState);
     try {
-      await this.startTaskFromText(chatState, text);
+      await this.startTaskFromText(chatState, text, { selectionAskMeta });
     } catch (error) {
       Zotero.debug(`Zotero Assistant sendChatInput failed: ${error}`);
     } finally {
@@ -589,6 +1070,7 @@ var ZoteroAssistantPluginChat = (() => {
     const body = state.chatApprovalNode;
     body.textContent = "";
     if (!this.task || !this.task.pendingApproval) {
+      this.renderSelectionAskDraftPrompt(state, body);
       return;
     }
     const pending = this.task.pendingApproval;
@@ -608,6 +1090,48 @@ var ZoteroAssistantPluginChat = (() => {
     buttons.appendChild(reject);
     card.appendChild(title);
     card.appendChild(summary);
+    card.appendChild(buttons);
+    body.appendChild(card);
+  },
+
+  renderSelectionAskDraftPrompt(state, body) {
+    const draft = state && state.pendingSelectionAskDraft;
+    if (!draft || !body) {
+      return;
+    }
+    const card = this.el(state.doc, "div", "za-selection-draft-card", "");
+    const title = this.el(state.doc, "div", "za-selection-draft-card-title", "输入框已有草稿");
+    const detail = this.el(
+      state.doc,
+      "div",
+      "za-selection-draft-card-text",
+      "请选择如何处理这次选句提问引用块。追加会插入到当前光标位置，覆盖会替换现有草稿。"
+    );
+    const buttons = this.el(state.doc, "div", "za-btn-row", "");
+    buttons.appendChild(this.actionButton(state.doc, "追加", "primary", () => {
+      this.applySelectionAskDraftToInput(state, draft, "append");
+      state.chatNotice = draft.meta.truncated
+        ? `已追加选中文本，原文 ${draft.meta.originalChars} 字符，已截断为 ${draft.meta.includedChars} 字符。`
+        : "已追加选中文本。";
+      this.log("selection.ask.prepared", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: true, mergeMode: "append" }));
+      this.renderChatPanel(state);
+    }));
+    buttons.appendChild(this.actionButton(state.doc, "覆盖", "secondary", () => {
+      this.applySelectionAskDraftToInput(state, draft, "replace");
+      state.chatNotice = draft.meta.truncated
+        ? `已覆盖为选中文本，原文 ${draft.meta.originalChars} 字符，已截断为 ${draft.meta.includedChars} 字符。`
+        : "已覆盖为选中文本。";
+      this.log("selection.ask.prepared", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: true, mergeMode: "replace" }));
+      this.renderChatPanel(state);
+    }));
+    buttons.appendChild(this.actionButton(state.doc, "取消", "ghost", () => {
+      state.pendingSelectionAskDraft = null;
+      state.chatNotice = "已取消这次选句提问草稿。";
+      this.log("selection.ask.cancelled", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: true }));
+      this.renderChatPanel(state);
+    }));
+    card.appendChild(title);
+    card.appendChild(detail);
     card.appendChild(buttons);
     body.appendChild(card);
   },
@@ -686,9 +1210,10 @@ var ZoteroAssistantPluginChat = (() => {
       });
   },
 
-  async startTaskFromText(state, text) {
+  async startTaskFromText(state, text, options = {}) {
     state = this.resolveChatState(state);
     const taskText = String(text || "").trim();
+    const selectionAskMeta = options.selectionAskMeta || null;
     if (!taskText) {
       this.showChatNotice(state, "请输入一个明确任务。助手不会默认执行任何任务。");
       return false;
@@ -705,7 +1230,7 @@ var ZoteroAssistantPluginChat = (() => {
       return false;
     }
     if (this.canContinueConversationTask()) {
-      return await this.continueConversationWithUserMessage(state, taskText);
+      return await this.continueConversationWithUserMessage(state, taskText, { selectionAskMeta });
     }
     let libraryID;
     let libraryName;
@@ -754,9 +1279,15 @@ var ZoteroAssistantPluginChat = (() => {
       canContinueAfterCompressionFailure: false,
       compressionFailure: null,
       sessionMemoryInjected: false,
-      sessionMemoryChars: 0
+      sessionMemoryChars: 0,
+      selectionAsk: selectionAskMeta ? this.selectionAskLogPayload(selectionAskMeta) : null
     };
-    this.log("task.started", { id: this.task.id, prompt: taskText, libraryID, libraryName, status: this.task.status });
+    const taskStartedLog = { id: this.task.id, prompt: taskText, libraryID, libraryName, status: this.task.status };
+    if (selectionAskMeta) {
+      taskStartedLog.prompt = "[selection ask prompt omitted]";
+      taskStartedLog.selectionAsk = this.selectionAskLogPayload(selectionAskMeta);
+    }
+    this.log("task.started", taskStartedLog);
     try {
       this.beginChatTurnUser(taskText);
     } catch (error) {
@@ -1071,7 +1602,8 @@ var ZoteroAssistantPluginChat = (() => {
     }
   },
 
-  async continueConversationWithUserMessage(state, taskText) {
+  async continueConversationWithUserMessage(state, taskText, options = {}) {
+    const selectionAskMeta = options.selectionAskMeta || null;
     const libraryID = this.getActiveLibraryID(state.win);
     if (this.task.libraryID && this.task.libraryID !== libraryID) {
       this.task.libraryID = libraryID;
@@ -1087,7 +1619,12 @@ var ZoteroAssistantPluginChat = (() => {
     this.task.messages.push({ role: "user", content: taskText });
     this.task.error = null;
     this.task.pendingApproval = null;
-    this.log("task.user_reply", { id: this.task.id, content: taskText, continued: true });
+    const userReplyLog = { id: this.task.id, content: taskText, continued: true };
+    if (selectionAskMeta) {
+      userReplyLog.content = "[selection ask prompt omitted]";
+      userReplyLog.selectionAsk = this.selectionAskLogPayload(selectionAskMeta);
+    }
+    this.log("task.user_reply", userReplyLog);
     this.renderAll();
     this.scheduleChatRepaint(state);
     this.runTaskLoopInBackground(state);

@@ -3,3 +3,4 @@ __pycache__/
 *.py[cod]
 node_modules/
 .DS_Store
+chrome/content/*.bak

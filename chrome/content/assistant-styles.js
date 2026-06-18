@@ -1,6 +1,6 @@
 var ZoteroAssistantStyles = (() => {
   const STYLE_ID = "zotero-assistant-global-styles";
-  const STYLE_REV = "za-chat-ui-md-resize-20260617";
+  const STYLE_REV = "za-selection-ask-20260618";
   function getGlobalStylesText() {
     return `
 #zotero-assistant-ui-root,
@@ -433,6 +433,24 @@ var ZoteroAssistantStyles = (() => {
   font-size: 12px !important;
   line-height: 1.45 !important;
   box-shadow: 0 8px 20px rgba(245, 158, 11, 0.12) !important;
+}
+#zotero-assistant-chat-panel .za-selection-draft-card {
+  border: 1px solid rgba(196, 92, 38, 0.30) !important;
+  border-radius: 14px !important;
+  background: #fff7ed !important;
+  padding: 10px !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  box-shadow: 0 8px 20px rgba(196, 92, 38, 0.10) !important;
+}
+#zotero-assistant-chat-panel .za-selection-draft-card-title {
+  font-weight: 800 !important;
+  margin-bottom: 4px !important;
+  color: #9a3412 !important;
+}
+#zotero-assistant-chat-panel .za-selection-draft-card-text {
+  color: #64748b !important;
+  white-space: pre-wrap !important;
 }
 #zotero-assistant-launcher {
   font-family: var(--za-font, system-ui, sans-serif) !important;
