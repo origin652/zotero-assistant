@@ -349,8 +349,18 @@ var ZoteroAssistantPluginUiDom = (() => {
     });
   },
 
-  fillChatBubbleContent(bubble, text, isUser) {
+  fillChatBubbleContent(bubble, text, isUser, options = {}) {
     const body = String(text || "");
+    const reasoning = String(options.reasoning || "").trim();
+    if (reasoning) {
+      const details = this.el(bubble.ownerDocument, "details", "za-chat-reasoning", "");
+      const summary = this.el(bubble.ownerDocument, "summary", "za-chat-reasoning-summary", "思考过程");
+      const reasoningBody = this.el(bubble.ownerDocument, "div", "za-chat-reasoning-body za-markdown", "");
+      this.renderMarkdownInto(reasoningBody, reasoning);
+      details.appendChild(summary);
+      details.appendChild(reasoningBody);
+      bubble.appendChild(details);
+    }
     const useMd = !isUser || this.looksLikeMarkdown(body);
     const content = this.el(bubble.ownerDocument, "div", useMd ? "za-chat-bubble-text za-markdown" : "za-chat-bubble-text", "");
     if (useMd) {

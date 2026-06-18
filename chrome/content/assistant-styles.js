@@ -322,6 +322,38 @@ var ZoteroAssistantStyles = (() => {
 #zotero-assistant-chat-panel .za-chat-bubble-text a {
   cursor: pointer !important;
 }
+#zotero-assistant-chat-panel .za-chat-reasoning {
+  margin: 0 0 8px 0 !important;
+  padding: 0 !important;
+  border: 1px solid rgba(100, 116, 139, 0.22) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+  color: #64748b !important;
+}
+#zotero-assistant-chat-panel .za-chat-reasoning-summary {
+  list-style: disclosure-closed !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  -moz-user-select: none !important;
+  padding: 6px 8px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  line-height: 1.35 !important;
+  color: #64748b !important;
+}
+#zotero-assistant-chat-panel .za-chat-reasoning[open] .za-chat-reasoning-summary {
+  border-bottom: 1px solid rgba(100, 116, 139, 0.18) !important;
+}
+#zotero-assistant-chat-panel .za-chat-reasoning-body {
+  padding: 7px 8px !important;
+  max-height: 180px !important;
+  overflow: auto !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  color: #475569 !important;
+}
 #zotero-assistant-chat-panel .za-chat-name {
   user-select: none !important;
   -moz-user-select: none !important;

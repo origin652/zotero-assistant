@@ -1187,17 +1187,22 @@ var ZoteroAssistantPluginChat = (() => {
 
   appendChatDisplay(speaker, text, options = {}) {
     const raw = String(text || "").trim();
-    if (!raw) {
+    const rawReasoning = String(options.reasoning || "").trim();
+    if (!raw && !rawReasoning) {
       return;
     }
     const clipped = raw.length > MAX_CHAT_DISPLAY_CHARS
       ? raw.slice(0, MAX_CHAT_DISPLAY_CHARS) + "\n…（内容已截断）"
       : raw;
+    const clippedReasoning = rawReasoning.length > MAX_CHAT_DISPLAY_CHARS
+      ? rawReasoning.slice(0, MAX_CHAT_DISPLAY_CHARS) + "\n…（思考过程已截断）"
+      : rawReasoning;
     const isUser = speaker === "user";
     this.chatDisplayLog.push({
       speaker: isUser ? "user" : "ai",
       label: options.label || (isUser ? "你" : "AI"),
-      text: clipped,
+      text: clipped || (clippedReasoning ? "（模型只返回了思考过程，没有返回正文。）" : ""),
+      reasoning: clippedReasoning,
       kind: options.kind || (isUser ? "user" : "ai"),
       time: Date.now()
     });
@@ -1324,7 +1329,9 @@ var ZoteroAssistantPluginChat = (() => {
       : isProcess
         ? "max-width:100%;border-radius:10px;border-bottom-left-radius:3px;padding:8px 10px;font-size:11px;line-height:1.45;background:#f1f5f9;color:#64748b;border:1px dashed #cbd5e1;box-shadow:none;"
         : "max-width:100%;border-radius:10px;border-bottom-left-radius:3px;padding:9px 12px;font-size:13px;line-height:1.5;background:#ffffff;color:#111827;border:1px solid #e2e5ea;box-shadow:0 1px 2px rgba(0,0,0,0.06);";
-    this.fillChatBubbleContent(bubble, entry.text, isUser && !isProcess);
+    this.fillChatBubbleContent(bubble, entry.text, isUser && !isProcess, {
+      reasoning: !isUser && !isProcess ? entry.reasoning : ""
+    });
     stack.appendChild(name);
     stack.appendChild(bubble);
     if (isUser) {
@@ -1343,6 +1350,7 @@ var ZoteroAssistantPluginChat = (() => {
       speaker: entry.speaker,
       label: entry.label,
       text: entry.text,
+      reasoning: entry.reasoning || "",
       kind: entry.kind || entry.speaker
     }));
     const pending = this.chatTurnPendingTranscriptEntries();
@@ -1380,16 +1388,30 @@ var ZoteroAssistantPluginChat = (() => {
     this.chatTurnPending = { userText: "", aiReadable: [], process: [] };
   },
 
-  pushChatTurnReadable(text) {
+  normalizeChatReadableEntry(entry) {
+    if (entry && typeof entry === "object") {
+      return {
+        text: String(entry.text || "").trim(),
+        reasoning: String(entry.reasoning || "").trim()
+      };
+    }
+    return {
+      text: String(entry || "").trim(),
+      reasoning: ""
+    };
+  },
+
+  pushChatTurnReadable(text, options = {}) {
     const raw = String(text || "").trim();
-    if (!raw || !this.chatTurnPending) {
+    const reasoning = String(options.reasoning || "").trim();
+    if ((!raw && !reasoning) || !this.chatTurnPending) {
       return;
     }
-    const last = this.chatTurnPending.aiReadable[this.chatTurnPending.aiReadable.length - 1];
-    if (last === raw) {
+    const last = this.normalizeChatReadableEntry(this.chatTurnPending.aiReadable[this.chatTurnPending.aiReadable.length - 1]);
+    if (last.text === raw && last.reasoning === reasoning) {
       return;
     }
-    this.chatTurnPending.aiReadable.push(raw);
+    this.chatTurnPending.aiReadable.push({ text: raw, reasoning });
     if (this.task) {
       this.task.userFacingMessageCount = (this.task.userFacingMessageCount || 0) + 1;
     }
@@ -1409,14 +1431,20 @@ var ZoteroAssistantPluginChat = (() => {
       this.resetChatTurnPending();
       return;
     }
-    const readable = (turn.aiReadable || []).filter(Boolean);
+    const readable = (turn.aiReadable || [])
+      .map((entry) => this.normalizeChatReadableEntry(entry))
+      .filter((entry) => entry.text || entry.reasoning);
     const process = (turn.process || []).filter(Boolean);
     if (!readable.length && !process.length) {
       this.resetChatTurnPending();
       return;
     }
     if (readable.length) {
-      this.appendChatDisplay("ai", readable.join("\n\n"), { label: "AI", kind: "ai" });
+      this.appendChatDisplay("ai", readable.map((entry) => entry.text).filter(Boolean).join("\n\n"), {
+        label: "AI",
+        kind: "ai",
+        reasoning: readable.map((entry) => entry.reasoning).filter(Boolean).join("\n\n")
+      });
     }
     if (process.length) {
       const summary = this.compressProcessLinesForChat(process);
@@ -1949,12 +1977,15 @@ var ZoteroAssistantPluginChat = (() => {
       return [];
     }
     const entries = [];
-    const readable = (turn.aiReadable || []).filter(Boolean);
+    const readable = (turn.aiReadable || [])
+      .map((entry) => this.normalizeChatReadableEntry(entry))
+      .filter((entry) => entry.text || entry.reasoning);
     if (readable.length) {
       entries.push({
         speaker: "ai",
         label: "AI",
-        text: readable.join("\n\n"),
+        text: readable.map((entry) => entry.text).filter(Boolean).join("\n\n") || "（模型只返回了思考过程，没有返回正文。）",
+        reasoning: readable.map((entry) => entry.reasoning).filter(Boolean).join("\n\n"),
         kind: "ai"
       });
     }
@@ -1977,9 +2008,9 @@ var ZoteroAssistantPluginChat = (() => {
     if (!message || !this.chatTurnPending) {
       return;
     }
-    const assistantText = this.stripJsonToolPlanFromAssistantText(message.content);
-    if (assistantText) {
-      this.pushChatTurnReadable(assistantText);
+    const displayParts = this.assistantMessageDisplayParts(message);
+    if (displayParts.text || displayParts.reasoning) {
+      this.pushChatTurnReadable(displayParts.text, { reasoning: displayParts.reasoning });
     }
     if (!Array.isArray(message.tool_calls)) {
       return;

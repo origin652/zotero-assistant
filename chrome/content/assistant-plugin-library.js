@@ -89,6 +89,72 @@ var ZoteroAssistantPluginLibrary = (() => {
     return item && item.itemType === "note";
   },
 
+  attachmentContentType(item) {
+    return String(item && item.attachmentContentType || "").trim().toLowerCase();
+  },
+
+  attachmentFilename(item) {
+    return String(
+      safeCall(() => item.attachmentFilename) ||
+      safeCall(() => item.getFilename && item.getFilename()) ||
+      safeCall(() => item.getFilePath && item.getFilePath()) ||
+      ""
+    );
+  },
+
+  isEPUBAttachment(item) {
+    if (!item || !isAttachmentItem(item)) {
+      return false;
+    }
+    const contentType = this.attachmentContentType(item);
+    const filename = this.attachmentFilename(item);
+    return contentType === "application/epub+zip" || /\.epub$/i.test(filename);
+  },
+
+  isPDFAttachment(item) {
+    if (!item || !isAttachmentItem(item)) {
+      return false;
+    }
+    const contentType = this.attachmentContentType(item);
+    const filename = this.attachmentFilename(item);
+    return contentType === "application/pdf" || /\.pdf$/i.test(filename);
+  },
+
+  attachmentReadPriority(item) {
+    if (!item || !isAttachmentItem(item)) {
+      return 0;
+    }
+    const contentType = this.attachmentContentType(item);
+    const filename = this.attachmentFilename(item);
+    if (this.isEPUBAttachment(item)) {
+      return 60;
+    }
+    if (this.isPDFAttachment(item)) {
+      return 55;
+    }
+    if (Zotero.MIME && typeof Zotero.MIME.isTextType === "function" && Zotero.MIME.isTextType(contentType)) {
+      return 50;
+    }
+    if (/\.x?html?$/i.test(filename) || /html|xml|text/.test(contentType)) {
+      return 45;
+    }
+    return 10;
+  },
+
+  attachmentKind(item) {
+    if (this.isEPUBAttachment(item)) {
+      return "epub";
+    }
+    if (this.isPDFAttachment(item)) {
+      return "pdf";
+    }
+    const contentType = this.attachmentContentType(item);
+    if (Zotero.MIME && typeof Zotero.MIME.isTextType === "function" && Zotero.MIME.isTextType(contentType)) {
+      return "text";
+    }
+    return contentType || "attachment";
+  },
+
   itemSummary(item, extra = {}) {
     const summary = {
       key: item.key,
@@ -108,6 +174,13 @@ var ZoteroAssistantPluginLibrary = (() => {
       notes: { count: 0, previews: [] },
       annotations: { count: 0, previews: [] }
     };
+    if (isAttachmentItem(item)) {
+      summary.attachment = {
+        contentType: String(item.attachmentContentType || ""),
+        filename: this.attachmentFilename(item),
+        kind: this.attachmentKind(item)
+      };
+    }
     return Object.assign(summary, extra);
   },
 
@@ -132,6 +205,207 @@ var ZoteroAssistantPluginLibrary = (() => {
     return null;
   },
 
+  readerStateCandidates(reader) {
+    const list = [
+      safeCall(() => reader._state),
+      safeCall(() => reader.state),
+      safeCall(() => reader._internalReader && reader._internalReader._state),
+      safeCall(() => reader._reader && reader._reader._state)
+    ].filter(Boolean);
+    return Array.from(new Set(list));
+  },
+
+  isReaderViewStats(value) {
+    return !!(
+      value &&
+      typeof value === "object" &&
+      (
+        this.firstInteger([value.pageIndex]) !== null ||
+        this.firstInteger([value.pagesCount]) !== null ||
+        value.pageLabel ||
+        value.usePhysicalPageNumbers !== undefined
+      )
+    );
+  },
+
+  readerCurrentViewStats(reader) {
+    for (const state of this.readerStateCandidates(reader)) {
+      const primaryStats = safeCall(() => state.primaryViewStats);
+      const secondaryStats = safeCall(() => state.secondaryViewStats);
+      const ordered = state.primary === false
+        ? [secondaryStats, primaryStats]
+        : [primaryStats, secondaryStats];
+      for (const stats of ordered) {
+        if (this.isReaderViewStats(stats)) {
+          return stats;
+        }
+      }
+    }
+    return null;
+  },
+
+  readerViewCandidates(reader) {
+    const roots = [
+      reader,
+      safeCall(() => reader._internalReader),
+      safeCall(() => reader._reader)
+    ].filter(Boolean);
+    const views = [];
+    for (const root of roots) {
+      const state = safeCall(() => root._state) || safeCall(() => root.state) || {};
+      const primary = safeCall(() => root._primaryView);
+      const secondary = safeCall(() => root._secondaryView);
+      const ordered = state.primary === false
+        ? [secondary, primary]
+        : [primary, secondary];
+      views.push(...ordered.filter(Boolean));
+    }
+    return Array.from(new Set(views));
+  },
+
+  readerEPUBViewCandidates(reader) {
+    return this.readerViewCandidates(reader).filter((view) => {
+      const pageMapping = safeCall(() => view.pageMapping);
+      return !!(pageMapping && typeof pageMapping.ranges === "function");
+    });
+  },
+
+  readerEPUBPageTextAvailable(reader) {
+    return this.readerEPUBViewCandidates(reader).length > 0;
+  },
+
+  readerEPUBPageLabel(reader, pageIndex) {
+    if (!Number.isInteger(pageIndex)) {
+      return "";
+    }
+    for (const view of this.readerEPUBViewCandidates(reader)) {
+      const pageMapping = safeCall(() => view.pageMapping);
+      const labels = safeCall(() => Array.from(pageMapping.pageLabels()));
+      if (Array.isArray(labels) && labels[pageIndex]) {
+        return String(labels[pageIndex]);
+      }
+    }
+    return "";
+  },
+
+  readerEPUBPageMappingSnapshot(reader) {
+    const view = this.readerEPUBViewCandidates(reader)[0];
+    const pageMapping = view && safeCall(() => view.pageMapping);
+    if (!pageMapping) {
+      return null;
+    }
+    return {
+      viewClass: view && view.constructor ? view.constructor.name : "",
+      length: this.firstInteger([safeCall(() => pageMapping.length)]),
+      isPhysical: !!safeCall(() => pageMapping.isPhysical),
+      hasRanges: typeof pageMapping.ranges === "function",
+      hasPageLabels: typeof pageMapping.pageLabels === "function"
+    };
+  },
+
+  readerDOMRange(value) {
+    if (!value) {
+      return null;
+    }
+    if (typeof value.toRange === "function") {
+      return safeCall(() => value.toRange()) || null;
+    }
+    if (value.startContainer && value.endContainer) {
+      return value;
+    }
+    return null;
+  },
+
+  readerDOMRangeDocument(range) {
+    if (!range) {
+      return null;
+    }
+    return safeCall(() => range.startContainer.ownerDocument) ||
+      safeCall(() => range.commonAncestorContainer.ownerDocument) ||
+      safeCall(() => range.commonAncestorContainer) ||
+      null;
+  },
+
+  setDOMRangeEndToDocumentEnd(range, view, doc) {
+    const root = safeCall(() => doc.body) ||
+      safeCall(() => view._iframeDocument && view._iframeDocument.body) ||
+      safeCall(() => doc.documentElement);
+    if (!root || typeof range.setEnd !== "function") {
+      return false;
+    }
+    try {
+      range.setEnd(root, root.childNodes ? root.childNodes.length : 0);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  },
+
+  readEPUBReaderPageText(state, pageIndex) {
+    if (!state || !this.isEPUBAttachment(state.attachment) || !Number.isInteger(pageIndex)) {
+      return { available: false, text: "", source: "", error: "当前附件不是 EPUB，或页码无效。" };
+    }
+    for (const view of this.readerEPUBViewCandidates(state.reader)) {
+      const pageMapping = safeCall(() => view.pageMapping);
+      const ranges = safeCall(() => Array.from(pageMapping.ranges()));
+      if (!Array.isArray(ranges) || !ranges[pageIndex]) {
+        continue;
+      }
+      const start = this.readerDOMRange(ranges[pageIndex]);
+      const startDoc = this.readerDOMRangeDocument(start);
+      const doc = startDoc || safeCall(() => view._iframeDocument);
+      if (!start || !doc || typeof doc.createRange !== "function") {
+        continue;
+      }
+      try {
+        const range = doc.createRange();
+        range.setStart(start.startContainer, start.startOffset);
+        let hasEnd = false;
+        const next = ranges[pageIndex + 1] ? this.readerDOMRange(ranges[pageIndex + 1]) : null;
+        if (next && this.readerDOMRangeDocument(next) === doc) {
+          range.setEnd(next.startContainer, next.startOffset);
+          hasEnd = true;
+        }
+        if (!hasEnd && !this.setDOMRangeEndToDocumentEnd(range, view, doc)) {
+          continue;
+        }
+        return {
+          available: true,
+          text: normalizeFulltextContent(range.toString()),
+          source: "epub-pageMapping-range"
+        };
+      } catch (error) {
+      }
+    }
+    return { available: false, text: "", source: "", error: "当前 EPUB Reader 没有可用的页面范围映射。" };
+  },
+
+  readerViewStatsSnapshot(stats) {
+    if (!stats || typeof stats !== "object") {
+      return null;
+    }
+    const keys = [
+      "pageIndex",
+      "pageLabel",
+      "pagesCount",
+      "usePhysicalPageNumbers",
+      "canNavigateToFirstPage",
+      "canNavigateToLastPage",
+      "canNavigateToPreviousPage",
+      "canNavigateToNextPage",
+      "canNavigateBack",
+      "canNavigateForward"
+    ];
+    const out = {};
+    for (const key of keys) {
+      const value = stats[key];
+      if (value !== undefined && value !== null && typeof value !== "object") {
+        out[key] = value;
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  },
+
   itemTagNames(item) {
     const tags = safeCall(() => item.getTags());
     return Array.isArray(tags) ? tags.map((tag) => tag.tag).filter(Boolean) : [];
@@ -150,31 +424,75 @@ var ZoteroAssistantPluginLibrary = (() => {
   },
 
   readerPageInfo(reader, pdfApp) {
+    const viewStats = this.readerCurrentViewStats(reader);
     const totalPages = this.firstInteger([
+      safeCall(() => viewStats && viewStats.pagesCount),
       safeCall(() => pdfApp.pdfDocument && pdfApp.pdfDocument.numPages),
       safeCall(() => pdfApp.pdfViewer && pdfApp.pdfViewer.pagesCount),
       safeCall(() => pdfApp.pagesCount),
       safeCall(() => reader._state && reader._state.totalPages),
-      safeCall(() => reader._internalReader && reader._internalReader._state && reader._internalReader._state.totalPages)
+      safeCall(() => reader._state && reader._state.pagesCount),
+      safeCall(() => reader._state && reader._state.pageCount),
+      safeCall(() => reader.state && reader.state.totalPages),
+      safeCall(() => reader.state && reader.state.pagesCount),
+      safeCall(() => reader.state && reader.state.pageCount),
+      safeCall(() => reader._internalReader && reader._internalReader._state && reader._internalReader._state.totalPages),
+      safeCall(() => reader._internalReader && reader._internalReader._state && reader._internalReader._state.pagesCount),
+      safeCall(() => reader._internalReader && reader._internalReader._state && reader._internalReader._state.pageCount),
+      safeCall(() => reader._reader && reader._reader._state && reader._reader._state.totalPages),
+      safeCall(() => reader._reader && reader._reader._state && reader._reader._state.pagesCount),
+      safeCall(() => reader._reader && reader._reader._state && reader._reader._state.pageCount)
     ]);
     let pageIndex = this.firstInteger([
+      safeCall(() => viewStats && viewStats.pageIndex),
       safeCall(() => reader._state && reader._state.pageIndex),
       safeCall(() => reader.state && reader.state.pageIndex),
       safeCall(() => reader._internalReader && reader._internalReader._state && reader._internalReader._state.pageIndex),
-      safeCall(() => reader._reader && reader._reader._state && reader._reader._state.pageIndex)
+      safeCall(() => reader._reader && reader._reader._state && reader._reader._state.pageIndex),
+      safeCall(() => reader._primaryView && reader._primaryView._state && reader._primaryView._state.pageIndex),
+      safeCall(() => reader._internalReader && reader._internalReader._primaryView && reader._internalReader._primaryView._state && reader._internalReader._primaryView._state.pageIndex),
+      safeCall(() => reader._reader && reader._reader._primaryView && reader._reader._primaryView._state && reader._reader._primaryView._state.pageIndex)
     ]);
     const oneBasedPage = this.firstInteger([
       safeCall(() => pdfApp.pdfViewer && pdfApp.pdfViewer.currentPageNumber),
       safeCall(() => pdfApp.page),
       safeCall(() => reader.currentPageNumber),
-      safeCall(() => reader.pageNumber)
+      safeCall(() => reader.pageNumber),
+      safeCall(() => reader.currentPage),
+      safeCall(() => reader.page),
+      safeCall(() => reader._state && reader._state.currentPageNumber),
+      safeCall(() => reader._state && reader._state.pageNumber),
+      safeCall(() => reader._state && reader._state.currentPage),
+      safeCall(() => reader._state && reader._state.page),
+      safeCall(() => reader.state && reader.state.currentPageNumber),
+      safeCall(() => reader.state && reader.state.pageNumber),
+      safeCall(() => reader.state && reader.state.currentPage),
+      safeCall(() => reader.state && reader.state.page),
+      safeCall(() => reader._internalReader && reader._internalReader.currentPageNumber),
+      safeCall(() => reader._internalReader && reader._internalReader.pageNumber),
+      safeCall(() => reader._internalReader && reader._internalReader._state && reader._internalReader._state.currentPageNumber),
+      safeCall(() => reader._internalReader && reader._internalReader._state && reader._internalReader._state.pageNumber),
+      safeCall(() => reader._reader && reader._reader.currentPageNumber),
+      safeCall(() => reader._reader && reader._reader.pageNumber),
+      safeCall(() => reader._reader && reader._reader._state && reader._reader._state.currentPageNumber),
+      safeCall(() => reader._reader && reader._reader._state && reader._reader._state.pageNumber)
     ]);
     if (!Number.isInteger(pageIndex) && Number.isInteger(oneBasedPage)) {
       pageIndex = Math.max(0, oneBasedPage - 1);
     }
     const pageNumber = Number.isInteger(pageIndex) ? pageIndex + 1 : null;
-    const pageLabel = this.readerPageLabel(pdfApp, pageIndex) || (pageNumber ? String(pageNumber) : "");
-    return { pageIndex, pageNumber, pageLabel, totalPages };
+    const pageLabel = String(
+      safeCall(() => viewStats && viewStats.pageLabel) ||
+      this.readerPageLabel(pdfApp, pageIndex) ||
+      (pageNumber ? String(pageNumber) : "")
+    );
+    return {
+      pageIndex,
+      pageNumber,
+      pageLabel,
+      totalPages,
+      usePhysicalPageNumbers: !!safeCall(() => viewStats && viewStats.usePhysicalPageNumbers)
+    };
   },
 
   creatorSnapshot(creator) {
@@ -672,6 +990,7 @@ var ZoteroAssistantPluginLibrary = (() => {
   readerDebugSnapshot(state) {
     const reader = state && state.reader;
     const internal = reader && safeCall(() => reader._internalReader);
+    const viewStats = reader && this.readerCurrentViewStats(reader);
     return {
       tabID: state && state.tabID || "",
       hasReader: !!reader,
@@ -679,6 +998,8 @@ var ZoteroAssistantPluginLibrary = (() => {
       readerKeys: reader ? Object.keys(reader).slice(0, 80) : [],
       internalClass: internal && internal.constructor ? internal.constructor.name : "",
       internalKeys: internal ? Object.keys(internal).slice(0, 80) : [],
+      currentViewStats: this.readerViewStatsSnapshot(viewStats),
+      epubPageMapping: reader ? this.readerEPUBPageMappingSnapshot(reader) : null,
       attachmentID: state && state.attachment ? state.attachment.id : null,
       attachmentKey: state && state.attachment ? state.attachment.key : "",
       attachmentContentType: state && state.attachment ? String(state.attachment.attachmentContentType || "") : "",
@@ -1012,13 +1333,24 @@ var ZoteroAssistantPluginLibrary = (() => {
       return item;
     }
     const attachmentIDs = safeCall(() => item.getAttachments());
+    const attachments = [];
     for (const id of attachmentIDs || []) {
       const attachment = Zotero.Items.get(id);
       if (attachment && isAttachmentItem(attachment)) {
-        return attachment;
+        attachments.push(attachment);
       }
     }
-    return null;
+    if (!attachments.length) {
+      return null;
+    }
+    attachments.sort((a, b) => {
+      const priority = this.attachmentReadPriority(b) - this.attachmentReadPriority(a);
+      if (priority !== 0) {
+        return priority;
+      }
+      return String(this.attachmentFilename(a)).localeCompare(String(this.attachmentFilename(b)), "zh-Hans-CN");
+    });
+    return attachments[0] || null;
   },
 
   markLibraryIndexDirty(libraryID) {
@@ -1076,7 +1408,7 @@ var ZoteroAssistantPluginLibrary = (() => {
       const contentType = String(item && item.attachmentContentType || "").trim() || "unknown";
       return {
         ok: false,
-        error: `Zotero 9 未返回可读全文内容。附件类型：${contentType}。若这是 PDF，通常表示全文索引或文本缓存尚未生成。`
+        error: `Zotero 9 未返回可读全文内容。附件类型：${contentType}。这通常表示全文索引或文本缓存尚未生成。`
       };
     }
 
@@ -1137,8 +1469,12 @@ var ZoteroAssistantPluginLibrary = (() => {
       safeCall(() => reader._internalReader),
       safeCall(() => reader._reader),
       safeCall(() => reader._primaryView),
+      safeCall(() => reader._secondaryView),
       safeCall(() => reader._internalReader && reader._internalReader._primaryView),
-      safeCall(() => reader._reader && reader._reader._primaryView)
+      safeCall(() => reader._internalReader && reader._internalReader._secondaryView),
+      safeCall(() => reader._reader && reader._reader._primaryView),
+      safeCall(() => reader._reader && reader._reader._secondaryView),
+      ...this.readerViewCandidates(reader)
     ].filter(Boolean);
     return Array.from(new Set(list));
   },
@@ -1320,11 +1656,14 @@ var ZoteroAssistantPluginLibrary = (() => {
       attachmentKey: attachment ? attachment.key : "",
       title: owner ? (safeCall(() => owner.getField("title")) || safeCall(() => owner.getDisplayTitle())) : "",
       attachmentContentType: attachment ? String(attachment.attachmentContentType || "") : "",
+      attachmentKind: attachment ? this.attachmentKind(attachment) : "",
       pageIndex: Number.isInteger(pageInfo.pageIndex) ? pageInfo.pageIndex : null,
       pageNumber: Number.isInteger(pageInfo.pageNumber) ? pageInfo.pageNumber : null,
       pageLabel: pageInfo.pageLabel || "",
       totalPages: Number.isInteger(pageInfo.totalPages) ? pageInfo.totalPages : null,
-      canReadCurrentPages: !!(Number.isInteger(pageInfo.pageIndex) && state.textAPIAvailable)
+      usePhysicalPageNumbers: !!pageInfo.usePhysicalPageNumbers,
+      canReadCurrentPages: !!(Number.isInteger(pageInfo.pageIndex) && state.textAPIAvailable),
+      canReadFulltext: !!(attachment && this.attachmentReadPriority(attachment) > 0)
     };
   },
 
@@ -1409,6 +1748,12 @@ var ZoteroAssistantPluginLibrary = (() => {
         text: this.textFromPDFTextContent(content),
         source: "pdfjs-getTextContent"
       };
+    }
+    if (this.isEPUBAttachment(state.attachment)) {
+      const epubText = this.readEPUBReaderPageText(state, pageIndex);
+      if (epubText.available) {
+        return epubText;
+      }
     }
     for (const object of this.readerObjectCandidates(state.reader)) {
       for (const method of ["getPageText", "getPageTextContent", "getTextForPage"]) {
@@ -1614,7 +1959,7 @@ var ZoteroAssistantPluginLibrary = (() => {
       owner,
       pdfApp,
       pageInfo,
-      textAPIAvailable: !!(pdfApp || this.readerPageTextMethodAvailable(reader))
+      textAPIAvailable: !!(pdfApp || this.readerEPUBPageTextAvailable(reader) || this.readerPageTextMethodAvailable(reader))
     };
   },
 
@@ -2058,7 +2403,12 @@ var ZoteroAssistantPluginLibrary = (() => {
         reason: "Reader 没有暴露页面文本接口。",
         reader: this.readerDebugSnapshot(state)
       });
-      return { ok: false, error: "当前 Reader 没有暴露可用的页面文本接口。PDF 优先支持；EPUB 若无页面文本接口则暂不支持。" };
+      return {
+        ok: false,
+        error: this.isEPUBAttachment(attachment)
+          ? "当前 EPUB Reader 已找到，但没有暴露可用的页面文本接口。"
+          : "当前 Reader 没有暴露可用的页面文本接口。"
+      };
     }
 
     const indexes = [];
@@ -2076,7 +2426,7 @@ var ZoteroAssistantPluginLibrary = (() => {
     const warnings = [];
     let textAPIFailure = null;
     for (const index of indexes) {
-      const label = this.readerPageLabel(state.pdfApp, index) || String(index + 1);
+      const label = this.readerPageLabel(state.pdfApp, index) || this.readerEPUBPageLabel(state.reader, index) || String(index + 1);
       let pageText = "";
       let source = "";
       let textAvailable = false;
@@ -2131,14 +2481,16 @@ var ZoteroAssistantPluginLibrary = (() => {
         id: attachment.id,
         key: attachment.key,
         title: safeCall(() => attachment.getField("title")) || safeCall(() => attachment.getDisplayTitle()),
-        contentType: String(attachment.attachmentContentType || "")
+        contentType: String(attachment.attachmentContentType || ""),
+        kind: this.attachmentKind(attachment)
       },
       reader: {
         tabID: state.tabID || "",
         currentPageIndex: pageInfo.pageIndex,
         currentPageNumber: pageInfo.pageNumber,
         currentPageLabel: pageInfo.pageLabel || String(pageInfo.pageNumber || ""),
-        totalPages: pageInfo.totalPages
+        totalPages: pageInfo.totalPages,
+        usePhysicalPageNumbers: !!pageInfo.usePhysicalPageNumbers
       },
       pageWindow: {
         radius: READER_NEIGHBOR_PAGE_RADIUS,

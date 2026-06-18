@@ -738,14 +738,69 @@ var ZoteroAssistantPluginModel = (() => {
         if (typeof part === "string") {
           return part;
         }
+        if (this.isReasoningContentPart(part)) {
+          return "";
+        }
         if (part && typeof part.text === "string") {
           return part.text;
+        }
+        if (part && typeof part.output_text === "string") {
+          return part.output_text;
         }
         return "";
       })
       .filter(Boolean)
       .join("\n")
       .trim();
+  },
+
+  isReasoningContentPart(part) {
+    if (!part || typeof part !== "object") {
+      return false;
+    }
+    const type = String(part.type || part.kind || "").toLowerCase();
+    return /reason|think/.test(type);
+  },
+
+  normalizeReasoningContent(content) {
+    if (!content) {
+      return "";
+    }
+    if (typeof content === "string") {
+      return content.trim();
+    }
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => this.normalizeReasoningContent(part))
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    }
+    if (typeof content !== "object") {
+      return "";
+    }
+    if (typeof content.text === "string") {
+      return content.text.trim();
+    }
+    if (typeof content.output_text === "string") {
+      return content.output_text.trim();
+    }
+    if (typeof content.reasoning === "string") {
+      return content.reasoning.trim();
+    }
+    if (typeof content.thinking === "string") {
+      return content.thinking.trim();
+    }
+    if (typeof content.summary === "string") {
+      return content.summary.trim();
+    }
+    if (Array.isArray(content.summary)) {
+      return this.normalizeReasoningContent(content.summary);
+    }
+    if (Array.isArray(content.content)) {
+      return this.normalizeReasoningContent(content.content);
+    }
+    return "";
   },
 
   buildRequestVariants(endpoint, model, messages, options = {}) {
@@ -925,27 +980,53 @@ var ZoteroAssistantPluginModel = (() => {
     }
     if (mode === "chat") {
       const message = json && json.choices && json.choices[0] && json.choices[0].message;
+      const reasoning = this.extractChatMessageReasoning(message);
       if (!options.disableToolParsing && message && Array.isArray(message.tool_calls) && message.tool_calls.length) {
         return {
           role: message.role || "assistant",
           content: this.normalizeTextContent(message.content),
+          reasoning,
           tool_calls: message.tool_calls
         };
       }
       const content = this.normalizeTextContent(message && message.content);
       if (options.disableToolParsing) {
-        return this.normalizePlainAssistantMessage(content);
+        return this.normalizePlainAssistantMessage(content, reasoning);
       }
-      return this.normalizeContentToolPlan(content) || this.normalizePlainAssistantMessage(content);
+      const planned = this.normalizeContentToolPlan(content);
+      if (planned) {
+        planned.reasoning = reasoning;
+        return planned;
+      }
+      return this.normalizePlainAssistantMessage(content, reasoning);
     }
     const choice = json && json.choices && json.choices[0];
     const text = this.normalizeTextContent(
       choice && (choice.text || choice.message && choice.message.content)
     );
+    const reasoning = this.extractChatMessageReasoning(choice && choice.message);
     if (options.disableToolParsing) {
-      return this.normalizePlainAssistantMessage(text);
+      return this.normalizePlainAssistantMessage(text, reasoning);
     }
-    return this.normalizeContentToolPlan(text) || this.normalizePlainAssistantMessage(text);
+    const planned = this.normalizeContentToolPlan(text);
+    if (planned) {
+      planned.reasoning = reasoning;
+      return planned;
+    }
+    return this.normalizePlainAssistantMessage(text, reasoning);
+  },
+
+  extractChatMessageReasoning(message) {
+    if (!message || typeof message !== "object") {
+      return "";
+    }
+    return [
+      this.normalizeReasoningContent(message.reasoning),
+      this.normalizeReasoningContent(message.reasoning_content),
+      this.normalizeReasoningContent(message.thinking),
+      this.normalizeReasoningContent(message.thinking_content),
+      this.normalizeReasoningContent(message.reasoning_details)
+    ].filter(Boolean).join("\n\n").trim();
   },
 
   serializeErrorForDebug(error) {
@@ -1050,6 +1131,9 @@ var ZoteroAssistantPluginModel = (() => {
     if (typeof part === "string") {
       return part;
     }
+    if (this.isReasoningContentPart(part)) {
+      return "";
+    }
     if (typeof part.text === "string") {
       return part.text;
     }
@@ -1072,7 +1156,7 @@ var ZoteroAssistantPluginModel = (() => {
     this.task.messages.push(message);
     this.absorbAssistantMessageForChatDisplay(message);
     if (!Array.isArray(message.tool_calls) || !message.tool_calls.length) {
-      await this.handlePlainAssistantMessage(message.content);
+      await this.handlePlainAssistantMessage(message);
       return;
     }
     for (const call of message.tool_calls) {
@@ -1222,6 +1306,35 @@ var ZoteroAssistantPluginModel = (() => {
     return parts.join("\n").trim();
   },
 
+  extractResponsesReasoningText(json) {
+    if (!json || typeof json !== "object") {
+      return "";
+    }
+    const parts = [];
+    const direct = this.normalizeReasoningContent(json.reasoning || json.reasoning_content || json.thinking);
+    if (direct) {
+      parts.push(direct);
+    }
+    const output = Array.isArray(json.output) ? json.output : [];
+    for (const item of output) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      if (this.isReasoningContentPart(item)) {
+        const text = this.normalizeReasoningContent(item.summary || item.content || item.text || item);
+        if (text) {
+          parts.push(text);
+        }
+        continue;
+      }
+      const nested = this.normalizeReasoningContent(item.reasoning || item.reasoning_content || item.thinking);
+      if (nested) {
+        parts.push(nested);
+      }
+    }
+    return parts.filter(Boolean).join("\n\n").trim();
+  },
+
   buildResponsesInstructions(options = {}) {
     return [
       this.systemPrompt(),
@@ -1310,7 +1423,7 @@ var ZoteroAssistantPluginModel = (() => {
     return this.boundedIntPref(PREFS.contextCompressionTriggerChars, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS, 10000, 500000);
   },
 
-  normalizePlainAssistantMessage(content) {
+  normalizePlainAssistantMessage(content, reasoning = "") {
     const text = typeof content === "string" ? content.trim() : "";
     if (!text) {
       return null;
@@ -1318,6 +1431,7 @@ var ZoteroAssistantPluginModel = (() => {
     return {
       role: "assistant",
       content: text,
+      reasoning: String(reasoning || "").trim(),
       tool_calls: []
     };
   },
@@ -1351,8 +1465,9 @@ var ZoteroAssistantPluginModel = (() => {
     }
 
     const text = this.extractResponsesOutputText(json);
+    const reasoning = this.extractResponsesReasoningText(json);
     if (options.disableToolParsing) {
-      return this.normalizePlainAssistantMessage(text);
+      return this.normalizePlainAssistantMessage(text, reasoning);
     }
 
     const tool_calls = this.extractResponsesToolCalls(json);
@@ -1360,15 +1475,22 @@ var ZoteroAssistantPluginModel = (() => {
       return {
         role: "assistant",
         content: text,
+        reasoning,
         tool_calls
       };
     }
 
-    return this.normalizeContentToolPlan(text) || this.normalizePlainAssistantMessage(text);
+    const planned = this.normalizeContentToolPlan(text);
+    if (planned) {
+      planned.reasoning = reasoning;
+      return planned;
+    }
+    return this.normalizePlainAssistantMessage(text, reasoning);
   },
 
-  async handlePlainAssistantMessage(content) {
-    const text = this.stripJsonToolPlanFromAssistantText(content);
+  async handlePlainAssistantMessage(messageOrContent) {
+    const parts = this.assistantMessageDisplayParts(messageOrContent);
+    const text = parts.text;
     if (!text) {
       const pending = this.chatTurnPending;
       const hasPendingChat = pending && ((pending.aiReadable && pending.aiReadable.length) || (pending.process && pending.process.length));
@@ -1417,6 +1539,20 @@ var ZoteroAssistantPluginModel = (() => {
       this.showMessage(state, text);
     }
     this.renderAll();
+  },
+
+  assistantMessageDisplayParts(messageOrContent) {
+    const message = messageOrContent && typeof messageOrContent === "object" && !Array.isArray(messageOrContent)
+      ? messageOrContent
+      : { content: messageOrContent };
+    const explicitReasoning = this.extractChatMessageReasoning(message);
+    const rawText = typeof message.content === "string"
+      ? message.content
+      : this.normalizeTextContent(message.content);
+    return {
+      text: this.stripJsonToolPlanFromAssistantText(rawText),
+      reasoning: explicitReasoning
+    };
   },
 
   stripJsonToolPlanFromAssistantText(content) {
