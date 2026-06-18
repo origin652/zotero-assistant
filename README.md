@@ -1,69 +1,80 @@
-# Zotero 助手
+# Zotero Assistant
 
-在 Zotero 右侧加一个 AI 助手。你用一句话告诉它要做什么，它就帮你做：整理文献、补元数据、写笔记、改设置、调其他插件的功能，都能代办。
+[中文介绍](docs/README.zh-CN.md)
 
-它就住在 Zotero 里，不需要装别的软件，也不需要把你的文库连到什么外部服务上去操控。
+Zotero Assistant is an in-client AI assistant for Zotero 9. It adds a chat-based task interface inside Zotero so you can ask it to organize references, read the current PDF or EPUB page, create notes, update metadata, manage tags and collections, and operate other Zotero plugin commands.
 
-## 它能帮你做什么
+The plugin runs inside Zotero. It does not require a separate desktop app, and it does not connect your Zotero library to an external control service. Model requests are sent only to the AI API endpoint that you configure.
 
-- "把这些文献按主题分到几个分类里"
-- "给选中的几篇文献加上'已读'标签"
-- "帮这篇文献补全作者和年份"
-- "读一下这篇文献的正文，给我写一段笔记"
-- "把 Zotero 的同步设置打开"
-- "用我装的另一个插件的某个功能处理这条文献"
+## Features
 
-你只管用大白话说目标，它自己决定怎么做、分几步做。
+- Organize selected references into collections.
+- Add tags to selected or searched items.
+- Read item metadata, annotations, notes, indexed full text, and the current reader page.
+- Support current-page reading in Zotero PDF and EPUB readers.
+- Create notes and update item metadata.
+- Open Zotero preference panes and trigger discovered plugin commands.
+- Use approval controls for sensitive reads and write operations.
+- Keep a local audit trail and expose reversible actions where possible.
 
-它**不会**自作主张。如果你只说"帮我整理一下"却没说整理成什么样，它会先问你"按什么标准整理？"，问清楚再动手。它也不会在你没给任务的时候偷偷去整理你的书架。
+Example tasks:
 
-## 怎么用
+- "Group these papers by research topic."
+- "Add the tag `read` to the selected items."
+- "Read the current paper page and draft a note."
+- "Find missing year and author metadata for this item."
+- "Open the Zotero sync settings."
 
-1. 在 Zotero 里装好这个插件。
-2. 打开 Zotero 的设置，找到「Zotero 助手」，填上你的 AI 接口地址、模型名和密钥（用支持联网工具调用的那种接口）。
-3. 在 Zotero 右侧打开助手侧边栏，用一句话说出你的任务。
+## Installation
 
-任务开始后，侧边栏会显示它在干什么、做到了哪一步、做了哪些操作。你随时能看到全过程。
+1. Download `zotero-assistant.xpi` from the latest release.
+2. Open Zotero 9.
+3. Go to `Tools` -> `Add-ons`.
+4. Install the downloaded `.xpi` file.
+5. Restart Zotero if prompted.
 
-## 它动我的文库前会问我吗？
+## Configuration
 
-会，而且有三种模式，你在设置里选：
+Open Zotero preferences and select `Zotero Assistant`.
 
-**AI 审核模式（默认）**
-助手每次要改东西或读敏感内容前，会先让 AI 评估一下"这次操作风险大不大"。觉得没风险的，自己就做了；觉得有风险的，会停下来弹一张卡片问你。
+Configure:
 
-卡片上会写清楚：**它想做什么**、**AI 觉得风险多大**（低 / 中 / 高）、**为什么觉得有风险**。你看完再决定。
+- API base URL
+- model name
+- API key
+- API mode
+- safety mode
 
-**确认模式**
-保险起见，每次要改东西都问你，不靠 AI 判断。
+The API should be compatible with chat or responses-style model calls used by the plugin.
 
-**完全开放模式**
-全都不问，自己一路做下去。适合你很信任它、或者都是些无关紧要的小操作时用。
+## Safety Modes
 
-## 卡片上的三个按钮
+Zotero Assistant supports three safety modes:
 
-助手停下来问你的时候，你可以选：
+- AI review mode: the default mode. The assistant asks an audit model to classify sensitive reads or write actions, and asks for human approval when needed.
+- Confirm mode: write actions require explicit confirmation.
+- Open mode: actions run without confirmation. Use this only for trusted workflows.
 
-- **允许本次** —— 这次让它做，下次再问。
-- **记住此命令** —— 以后同类操作不用再问，直接做。
-- **拒绝** —— 不让做。拒绝之后助手不会卡住，它会知道你不愿意，然后换一种方式或者跟你解释为什么本来想这么做，对话继续。
+Deletion-style operations move items to the Zotero trash instead of permanently deleting them.
 
-## 它会把我的文献删了吗？
+## Privacy
 
-不会永久删除。删除类操作只会把条目挪到 Zotero 的回收站，你还能恢复。它没有永久删除的能力。
+Your API key is stored in Zotero preferences on your own machine. The plugin does not upload your library to a separate service. Content is sent to the model provider only when a task requires model processing and according to the tools used in that task.
 
-## 几个保护措施
+Debug logs, if enabled, may include task context, model responses, metadata, or document text. Write debug logs only to a trusted local directory.
 
-- 一次只做你给的一个任务，不会同时跑好几个。
-- 一次任务里最多新建 5 个分类、最多动 100 篇文献，不会失控批量改。
-- 它帮你归类的时候，只会把文献"加进"某个分类，不会把文献从原来的分类里"拿走"，除非你明确说要。
-- 它做的写操作大多可以撤销，侧边栏有撤销按钮。
-- 它干过的所有事都记在本地日志里，默认留 30 天，你可以回看它都做了什么。
+## Development
 
-## 我的密钥安全吗？
+Build the XPI:
 
-你的 AI 接口密钥保存在你这台电脑的 Zotero 设置里，不会上传到别处。所以请只在你自己可信的电脑上用，别在公共机器上填。
+```bash
+npm run build
+```
 
-## 装在哪里用
+Run JavaScript syntax checks:
 
-需要 Zotero 9。在 Zotero 的插件管理里加载插件文件即可。
+```bash
+npm run check
+```
+
+The generated package is written to `build/zotero-assistant.xpi`.
