@@ -7,7 +7,7 @@
   "scripts": {
     "build": "python3 scripts/build_xpi.py",
     "pack": "python3 scripts/build_xpi.py",
-    "check": "node --check bootstrap.js && node --check chrome/content/zotero-assistant.js && node --check scripts/build-xpi.mjs && python3 -c \"import ast, pathlib; ast.parse(pathlib.Path('scripts/build_xpi.py').read_text(encoding='utf-8'))\""
+    "check": "node --check bootstrap.js && node --check chrome/content/assistant-constants.js && node --check chrome/content/assistant-util.js && node --check chrome/content/assistant-styles.js && node --check chrome/content/assistant-tool-dispatch.js && node --check chrome/content/assistant-plugin-ui-dom.js && node --check chrome/content/assistant-plugin-sidebar.js && node --check chrome/content/assistant-plugin-approval-ui.js && node --check chrome/content/assistant-plugin-chat.js && node --check chrome/content/assistant-plugin-model.js && node --check chrome/content/assistant-plugin-task.js && node --check chrome/content/assistant-plugin-prefs.js && node --check chrome/content/assistant-plugin-library.js && node --check chrome/content/assistant-plugin-core.js && node --check chrome/content/zotero-assistant.js && node --check scripts/build-xpi.mjs && python -c \"import ast, pathlib; ast.parse(pathlib.Path('scripts/build_xpi.py').read_text(encoding='utf-8'))\""
   },
   "devDependencies": {
     "typescript": "^5.5.0"
