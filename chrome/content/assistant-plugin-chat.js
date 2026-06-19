@@ -1903,9 +1903,6 @@ var ZoteroAssistantPluginChat = (() => {
         args.recommendedAnswer ? `推荐：${args.recommendedAnswer}` : ""
       ].filter(Boolean).join("\n");
     }
-    if (name === "finish_task") {
-      return args.summary || "";
-    }
     return "";
   },
 
@@ -2044,7 +2041,39 @@ var ZoteroAssistantPluginChat = (() => {
         mustMessageUserFirst: true
       };
     }
+    const incomplete = this.incompleteFinishTaskSummaryReason(summary);
+    if (incomplete) {
+      return {
+        ok: false,
+        error: incomplete,
+        mustProvideSubstantiveSummary: true
+      };
+    }
     return { ok: true, summary };
+  },
+
+  incompleteFinishTaskSummaryReason(summaryText) {
+    const summary = String(summaryText || "").trim();
+    const compact = summary.replace(/\s+/g, "").replace(/[：:。.!！?？]+$/g, "");
+    const placeholderEndings = [
+      "如下",
+      "如下是",
+      "如下为",
+      "如下所示",
+      "总结如下",
+      "摘要如下",
+      "结果如下",
+      "概览如下",
+      "内容如下",
+      "列表如下"
+    ];
+    if (placeholderEndings.some((ending) => compact.endsWith(ending))) {
+      return "finish_task 被拒绝：summary 不能只写“如下”式引导语，必须直接包含实际结论、结果或下一步。";
+    }
+    if (/[:：]\s*$/.test(summary)) {
+      return "finish_task 被拒绝：summary 不能停在冒号后，必须直接包含实际结论、结果或下一步。";
+    }
+    return "";
   },
 
   appendAssistantToolCallsToChatDisplay(toolCalls) {

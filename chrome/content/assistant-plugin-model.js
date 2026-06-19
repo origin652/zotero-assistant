@@ -171,7 +171,8 @@ var ZoteroAssistantPluginModel = (() => {
       "{\"actions\":[{\"tool\":\"finish_task\",\"args\":{\"summary\":\"...\"}}]}",
       "{\"name\":\"finish_task\",\"arguments\":{\"summary\":\"...\"}}",
       "User-visible messages (mandatory): You MUST communicate with the user in Chinese before ending. Either send a normal assistant message (plain text in the same turn as tools, or request_clarification), or end with finish_task.summary that clearly explains outcomes. Never end a task with only silent tool calls and an empty or one-word summary.",
-      "finish_task is rejected if summary is missing/too short, or if this task has zero prior user-facing messages and summary is under 24 characters — in that case, reply to the user first, then call finish_task again."
+      "finish_task is rejected if summary is missing/too short, or if this task has zero prior user-facing messages and summary is under 24 characters — in that case, reply to the user first, then call finish_task again.",
+      "finish_task.summary must contain the actual result text. Do not end with placeholder introductions such as '摘要如下' or '结果如下' unless the detailed content is included in the same summary."
     ].join("\n");
   },
 
@@ -340,7 +341,8 @@ var ZoteroAssistantPluginModel = (() => {
   auditSystemInstruction() {
     return [
       "You are a risk reviewer for a Zotero desktop AI assistant operating in review safety mode.",
-      "You are given a single tool call the assistant wants to execute, plus a one-line task goal.",
+      "You are given a single tool call the assistant wants to execute, plus task context.",
+      "Task context includes the original task and recent user instructions. Treat the latest user instruction as authoritative when it refines or overrides the original task.",
       "Judge the risk of executing this exact call right now in this context.",
       "low: clearly safe, reversible, small scope, aligned with the task goal.",
       "mid: somewhat risky, large scope, or only loosely tied to the goal — worth a human glance.",
@@ -358,11 +360,12 @@ var ZoteroAssistantPluginModel = (() => {
 
   async auditToolCall(toolName, args) {
     const argsSummary = this.summarizeToolArgs(toolName, args);
-    const taskGoal = this.auditTaskGoal();
+    const taskContext = this.auditTaskContext();
     const payload = {
       tool: toolName,
       args: argsSummary,
-      taskGoal,
+      taskGoal: taskContext.effectiveGoal,
+      taskContext,
       safetyMode: "review"
     };
     let level = "high";
@@ -401,7 +404,7 @@ var ZoteroAssistantPluginModel = (() => {
       reason = `审核失败：${(error && error.message) || error}。需人工确认。`;
       ok = false;
     }
-    this.log("ai_review", { toolName, argsSummary, level, reason, ok });
+    this.log("ai_review", { toolName, argsSummary, taskContext, level, reason, ok });
     return { level, reason, ok };
   },
 
@@ -434,18 +437,47 @@ var ZoteroAssistantPluginModel = (() => {
     return null;
   },
 
-  auditTaskGoal() {
+  auditTaskContext() {
     if (!this.task) {
-      return "";
+      return {
+        originalTask: "",
+        latestUserInstruction: "",
+        recentUserInstructions: [],
+        currentAssistantSummary: "",
+        effectiveGoal: ""
+      };
     }
-    if (this.task.goal && String(this.task.goal).trim()) {
-      return String(this.task.goal).trim();
-    }
+    const explicitGoal = this.task.goal && String(this.task.goal).trim()
+      ? String(this.task.goal).trim()
+      : "";
+    const originalTask = truncateText(explicitGoal || String(this.task.prompt || "").trim(), 240);
     const messages = Array.isArray(this.task.messages) ? this.task.messages : [];
-    for (const message of messages) {
-      if (message && message.role === "user" && String(message.content || "").trim()) {
-        return truncateText(String(message.content), 120);
-      }
+    const userMessages = messages
+      .filter((message) => message && message.role === "user" && String(message.content || "").trim())
+      .map((message) => truncateText(String(message.content).trim(), 240));
+    const recentUserInstructions = userMessages.slice(-5);
+    const latestUserInstruction = recentUserInstructions.length
+      ? recentUserInstructions[recentUserInstructions.length - 1]
+      : originalTask;
+    const currentAssistantSummary = this.task.summary
+      ? truncateText(String(this.task.summary), 240)
+      : "";
+    const effectiveGoal = latestUserInstruction && originalTask && latestUserInstruction !== originalTask
+      ? truncateText(`最新用户指示：${latestUserInstruction}\n原始任务：${originalTask}`, 520)
+      : (latestUserInstruction || originalTask || currentAssistantSummary);
+    return {
+      originalTask,
+      latestUserInstruction,
+      recentUserInstructions,
+      currentAssistantSummary,
+      effectiveGoal
+    };
+  },
+
+  auditTaskGoal() {
+    const context = this.auditTaskContext();
+    if (context.effectiveGoal) {
+      return context.effectiveGoal;
     }
     return "";
   },
@@ -1159,6 +1191,7 @@ var ZoteroAssistantPluginModel = (() => {
       await this.handlePlainAssistantMessage(message);
       return;
     }
+    this.task.emptyAssistantTurnCount = 0;
     for (const call of message.tool_calls) {
       const name = call.function && call.function.name;
       const args = this.parseArguments(call.function && call.function.arguments);
@@ -1186,16 +1219,20 @@ var ZoteroAssistantPluginModel = (() => {
         content: JSON.stringify(result)
       });
       if (result && result.ok === false) {
+        const retryInstruction = result.validationError
+          ? `The ${name} call was rejected because its user-facing summary was incomplete: ${result.error || "unknown error"}. Continue with a substantive Chinese answer that includes actual results, then call finish_task again with that complete summary.`
+          : `The tool ${name} failed with error: ${result.error || "unknown error"}. Adjust the plan and retry. Consecutive tool failures: ${this.task.consecutiveToolFailures || 1}/3.`;
         this.task.messages.push({
           role: "system",
-          content: `The tool ${name} failed with error: ${result.error || "unknown error"}. Adjust the plan and retry. Consecutive tool failures: ${this.task.consecutiveToolFailures || 1}/3.`
+          content: retryInstruction
         });
         this.log("tool.retry_requested", {
           toolName: name,
-          retryCount: this.task.consecutiveToolFailures || 1,
+          retryCount: result.validationError ? 0 : (this.task.consecutiveToolFailures || 1),
+          validationError: !!result.validationError,
           error: result.error || "unknown error"
         });
-        if ((this.task.consecutiveToolFailures || 0) >= 3) {
+        if (!result.validationError && (this.task.consecutiveToolFailures || 0) >= 3) {
           this.task.status = "paused";
           this.task.phase = "tool_failed";
           this.task.error = `工具连续失败 3 次：${name} - ${result.error || "unknown error"}`;
@@ -1218,6 +1255,7 @@ var ZoteroAssistantPluginModel = (() => {
       }
     }
     if (this.task && this.task.status === "running") {
+      this.flushChatTurnToDisplay();
       this.renderChatPanelIfOpen();
       this.renderAll();
     } else if (this.task && (this.task.status === "waiting" || this.task.status === "complete" || this.task.status === "paused")) {
@@ -1425,9 +1463,6 @@ var ZoteroAssistantPluginModel = (() => {
 
   normalizePlainAssistantMessage(content, reasoning = "") {
     const text = typeof content === "string" ? content.trim() : "";
-    if (!text) {
-      return null;
-    }
     return {
       role: "assistant",
       content: text,
@@ -1494,17 +1529,27 @@ var ZoteroAssistantPluginModel = (() => {
     if (!text) {
       const pending = this.chatTurnPending;
       const hasPendingChat = pending && ((pending.aiReadable && pending.aiReadable.length) || (pending.process && pending.process.length));
+      this.task.emptyAssistantTurnCount = (this.task.emptyAssistantTurnCount || 0) + 1;
       if (hasPendingChat) {
         this.flushChatTurnToDisplay();
+      }
+      if (this.task.emptyAssistantTurnCount < 2) {
+        this.task.messages.push({
+          role: "system",
+          content: "Your previous response had no visible text and no tool calls. Do not return an empty message. Continue by either calling tools or calling finish_task with a clear Chinese user-facing summary."
+        });
         this.renderAll();
         return;
       }
       this.task.status = "paused";
       this.task.phase = "empty_response";
-      this.task.error = "模型没有返回可显示文本，也没有返回工具调用。";
+      this.task.error = "模型连续没有返回可显示文本，也没有返回工具调用。";
+      this.pushChatTurnReadable(`【任务已暂停】${this.task.error}`);
+      this.flushChatTurnToDisplay();
       this.log("task.paused", { id: this.task.id, reason: "empty_response" });
       await this.maybeWriteDebugReport("empty_response", {
-        reason: this.task.error
+        reason: this.task.error,
+        emptyAssistantTurnCount: this.task.emptyAssistantTurnCount
       });
       await this.safeUpdateSessionMemoryForTask("empty_response");
       this.renderAll();
@@ -1512,6 +1557,7 @@ var ZoteroAssistantPluginModel = (() => {
     }
     const state = this.firstState();
     const needsUserReply = /[?？]\s*$/.test(text) || /请问|需要你|请提供|请说明|告诉我/.test(text);
+    this.task.emptyAssistantTurnCount = 0;
     this.task.summary = text;
     this.task.pendingApproval = null;
     this.task.plainAssistantTurnCount = (this.task.plainAssistantTurnCount || 0) + 1;

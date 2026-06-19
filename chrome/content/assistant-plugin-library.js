@@ -648,11 +648,16 @@ var ZoteroAssistantPluginLibrary = (() => {
     }
     if (this.task) {
       if (result && result.ok === false) {
-        this.task.lastToolFailure = {
-          toolName,
-          error: result.error || "工具返回失败。"
-        };
-        this.task.consecutiveToolFailures = (this.task.consecutiveToolFailures || 0) + 1;
+        if (result.validationError) {
+          this.task.lastToolFailure = null;
+          this.task.consecutiveToolFailures = 0;
+        } else {
+          this.task.lastToolFailure = {
+            toolName,
+            error: result.error || "工具返回失败。"
+          };
+          this.task.consecutiveToolFailures = (this.task.consecutiveToolFailures || 0) + 1;
+        }
       } else if (this.isWriteTool(toolName)) {
         this.task.lastToolFailure = null;
         this.task.consecutiveToolFailures = 0;
@@ -1034,7 +1039,9 @@ var ZoteroAssistantPluginLibrary = (() => {
       return {
         ok: false,
         error: rule.error,
-        mustMessageUserFirst: !!rule.mustMessageUserFirst
+        mustMessageUserFirst: !!rule.mustMessageUserFirst,
+        mustProvideSubstantiveSummary: !!rule.mustProvideSubstantiveSummary,
+        validationError: true
       };
     }
     const summaryText = rule.summary;

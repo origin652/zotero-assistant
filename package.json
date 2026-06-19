@@ -1,6 +1,6 @@
 {
   "name": "zotero-assistant",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A Zotero 9 in-client assistant plugin with task harness, approvals, audit log, and reversible actions.",
   "type": "module",

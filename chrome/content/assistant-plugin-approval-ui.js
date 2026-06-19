@@ -643,7 +643,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       case "request_expanded_context":
         return this.truncateText(safeArgs.reason || "需要整库视角。", 140);
       case "create_collection":
-        return `新建 collection：${safeArgs.name || "未命名"}`;
+        return `新建 collection：${safeArgs.name || "未命名"}${safeArgs.parentKey ? `；父级 key：${safeArgs.parentKey}` : ""}`;
       case "add_items_to_collection":
         return `加入 ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} 条到 ${safeArgs.collectionKey || safeArgs.collectionName || "目标 collection"}`;
       case "add_tags":
