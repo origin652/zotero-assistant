@@ -578,7 +578,9 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         set_preference: `AI requests changing preference ${args.name || ""}. Reason: ${args.reason || unknown}`,
         request_zotero_restart: `AI requests restarting Zotero. Reason: ${args.reason || unknown}`,
         move_to_trash: `AI requests moving ${args.itemKeys ? args.itemKeys.length : 0} items to trash. Reason: ${args.reason || unknown}`,
-        trigger_plugin_command: `AI requests running another plugin command: ${args.commandId || ""}. ${args.summary || ""}`
+        trigger_plugin_command: `AI requests running another plugin command: ${args.commandId || ""}. ${args.summary || ""}`,
+        export_items_citation: `AI requests exporting ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} items as ${args.format || "a citation format"}${String(args.saveToPath || "").trim() ? ` and writing the file to ${args.saveToPath}` : " (chat text only, no file)"}. Reason: ${args.reason || unknown}`,
+        run_batch_plan: this.batchApprovalSummary(args, true)
       };
       return summaries[toolName] || `AI requests executing ${toolName}.`;
     }
@@ -589,9 +591,31 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       set_preference: `AI 请求修改设置 ${args.name || ""}。原因：${args.reason || "未说明"}`,
       request_zotero_restart: `AI 请求重启 Zotero。原因：${args.reason || "未说明"}`,
       move_to_trash: `AI 请求将 ${args.itemKeys ? args.itemKeys.length : 0} 个条目移到回收站。原因：${args.reason || "未说明"}`,
-      trigger_plugin_command: `AI 请求触发其他插件命令：${args.commandId || ""}。${args.summary || ""}`
+      trigger_plugin_command: `AI 请求触发其他插件命令：${args.commandId || ""}。${args.summary || ""}`,
+      export_items_citation: `AI 请求将 ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} 个条目导出为 ${args.format || "某种引用格式"}${String(args.saveToPath || "").trim() ? `，并写入文件 ${args.saveToPath}` : "（仅在聊天中返回文本，不写文件）"}。原因：${args.reason || "未说明"}`,
+      run_batch_plan: this.batchApprovalSummary(args, false)
     };
     return summaries[toolName] || `AI 请求执行 ${toolName}。`;
+  },
+
+  batchApprovalSummary(args, english) {
+    const plan = args && Array.isArray(args.plan) ? args.plan : [];
+    const counts = {};
+    for (const step of plan) {
+      const t = (step && step.tool) || "?";
+      counts[t] = (counts[t] || 0) + 1;
+    }
+    const validation = this.validateBatchPlan(plan);
+    const stepCount = plan.length;
+    const totalItems = validation.ok ? validation.totalItems : 0;
+    const highRisk = validation.ok && validation.hasHighRisk;
+    const breakdown = Object.keys(counts)
+      .map((t) => `${counts[t]}×${t}`)
+      .join(", ");
+    if (english) {
+      return `AI requests a batch plan of ${stepCount} steps (${breakdown || "none"}), ~${totalItems} items${highRisk ? ", includes high-risk steps" : ""}. Reason: ${args.reason || "not specified"}`;
+    }
+    return `AI 请求批量执行 ${stepCount} 步（${breakdown || "无"}），涉及约 ${totalItems} 个条目${highRisk ? "，含高风险步骤" : ""}。原因：${args.reason || "未说明"}`;
   },
 
   aiRiskTagClass(level) {
@@ -730,6 +754,39 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       }
       return { required: true, allowed: rememberedPreferencePrefix };
     }
+    if (toolName === "export_items_citation") {
+      const wantsSave = !!(args && String(args.saveToPath || "").trim());
+      if (!wantsSave) {
+        return { required: false, allowed: true };
+      }
+      const rememberKey = this.approvalKey(toolName, args);
+      const remembered = !!this.rememberedApprovals[rememberKey];
+      if (mode === "confirm") {
+        return { required: true, allowed: remembered };
+      }
+      if (mode === "open") {
+        return { required: false, allowed: true };
+      }
+      return { required: true, allowed: remembered };
+    }
+    if (toolName === "run_batch_plan") {
+      const validation = this.validateBatchPlan(args && args.plan);
+      if (!validation.ok) {
+        return { required: false, allowed: true };
+      }
+      if (!validation.hasWrite) {
+        return { required: false, allowed: true };
+      }
+      const rememberKey = this.approvalKey(toolName, args);
+      const remembered = !!this.rememberedApprovals[rememberKey];
+      if (mode === "confirm") {
+        return { required: true, allowed: remembered };
+      }
+      if (mode === "open") {
+        return { required: false, allowed: true };
+      }
+      return { required: true, allowed: remembered };
+    }
     const rememberKey = this.approvalKey(toolName, args);
     const remembered = !!this.rememberedApprovals[rememberKey];
     if (mode === "confirm") {
@@ -795,6 +852,12 @@ var ZoteroAssistantPluginApprovalUi = (() => {
           return this.truncateText(safeArgs.query || "", 160);
         case "web_fetch":
           return this.truncateText(`${safeArgs.url || ""} - ${safeArgs.prompt || ""}`, 200);
+        case "list_export_formats":
+          return "List available export formats";
+        case "export_items_citation":
+          return `Export ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} items as ${safeArgs.format || ""}${String(safeArgs.saveToPath || "").trim() ? ` -> ${safeArgs.saveToPath}` : " (chat)"}`;
+        case "run_batch_plan":
+          return `Batch plan: ${Array.isArray(safeArgs.plan) ? safeArgs.plan.length : 0} steps`;
         case "finish_task":
           return this.truncateText(safeArgs.summary || "End task.", 160);
         default:
@@ -855,6 +918,12 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         return this.truncateText(safeArgs.query || "", 160);
       case "web_fetch":
         return this.truncateText(`${safeArgs.url || ""} — ${safeArgs.prompt || ""}`, 200);
+      case "list_export_formats":
+        return "列出可用导出格式";
+      case "export_items_citation":
+        return `导出 ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} 条为 ${safeArgs.format || ""}${String(safeArgs.saveToPath || "").trim() ? ` -> ${safeArgs.saveToPath}` : "（聊天）"}`;
+      case "run_batch_plan":
+        return `批量计划：${Array.isArray(safeArgs.plan) ? safeArgs.plan.length : 0} 步`;
       case "finish_task":
         return this.truncateText(safeArgs.summary || "结束任务。", 160);
       default:
@@ -1011,6 +1080,15 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         const textPages = result.pages.filter((page) => page && page.text).length;
         return `Read ${result.pages.length} pages, ${textPages} with text.`;
       }
+      if (result.translatorID && typeof result.itemCount === "number") {
+        return `Exported ${result.itemCount} items as ${result.format || result.translatorID}${result.savedToPath ? ` -> ${result.savedToPath}` : ""}.`;
+      }
+      if (Array.isArray(result.formats)) {
+        return `Found ${result.formats.length} export formats.`;
+      }
+      if (typeof result.total === "number" && Array.isArray(result.results)) {
+        return `Batch completed: ${result.succeeded}/${result.total} succeeded, ${result.failed} failed.`;
+      }
       if (typeof result.markdown === "string" && result.markdown.length) {
         return `Fetched page (about ${result.markdown.length} characters).`;
       }
@@ -1079,6 +1157,15 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     if (Array.isArray(result.pages)) {
       const textPages = result.pages.filter((page) => page && page.text).length;
       return `读取 ${result.pages.length} 页，${textPages} 页含文本。`;
+    }
+    if (result.translatorID && typeof result.itemCount === "number") {
+      return `已导出 ${result.itemCount} 条为 ${result.format || result.translatorID}${result.savedToPath ? ` -> ${result.savedToPath}` : ""}。`;
+    }
+    if (Array.isArray(result.formats)) {
+      return `发现 ${result.formats.length} 种导出格式。`;
+    }
+    if (typeof result.total === "number" && Array.isArray(result.results)) {
+      return `批量完成：${result.succeeded}/${result.total} 步成功，${result.failed} 步失败。`;
     }
     if (typeof result.markdown === "string" && result.markdown.length) {
       return `已抓取页面（约 ${result.markdown.length} 字符）。`;
@@ -1161,6 +1248,58 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         approveLabel: this.isEnglishUI() ? "Allow Zotero restart" : "允许重启 Zotero",
         allowRemember: false,
         rememberKey: ""
+      };
+    }
+    if (toolName === "export_items_citation") {
+      const wantsSave = !!(args && String(args.saveToPath || "").trim());
+      if (!wantsSave) {
+        return null;
+      }
+      return {
+        id: callID,
+        kind: "file_write",
+        toolName,
+        args,
+        summary: this.approvalSummary(toolName, args),
+        details: JSON.stringify({
+          itemCount: Array.isArray(args.itemKeys) ? args.itemKeys.length : 0,
+          format: args.format || "",
+          saveToPath: args.saveToPath || "",
+          reason: args.reason || ""
+        }, null, 2),
+        approveLabel: this.isEnglishUI() ? "Allow writing this export file" : "允许写入该导出文件",
+        allowRemember: true,
+        rememberKey: this.approvalKey(toolName, args)
+      };
+    }
+    if (toolName === "run_batch_plan") {
+      const validation = this.validateBatchPlan(args && args.plan);
+      const planDetail = Array.isArray(args.plan)
+        ? args.plan.map((step, i) => ({
+            step: i + 1,
+            tool: (step && step.tool) || "",
+            label: (step && step.label) || "",
+            args: step && step.args
+          }))
+        : [];
+      return {
+        id: callID,
+        kind: "batch",
+        toolName,
+        args,
+        summary: this.approvalSummary(toolName, args),
+        details: JSON.stringify({
+          stepCount: planDetail.length,
+          totalItems: validation.ok ? validation.totalItems : 0,
+          hasHighRisk: validation.ok && validation.hasHighRisk,
+          valid: validation.ok,
+          validationError: validation.ok ? "" : validation.error,
+          reason: (args && args.reason) || "",
+          steps: planDetail
+        }, null, 2),
+        approveLabel: this.isEnglishUI() ? "Allow executing this batch plan" : "允许执行该批量计划",
+        allowRemember: true,
+        rememberKey: this.approvalKey(toolName, args)
       };
     }
     return {

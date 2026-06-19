@@ -37,6 +37,9 @@ var ZoteroAssistantToolDispatch = (() => {
       list_plugin_commands: (ctx) => ctx.toolListPluginCommands(),
       move_to_trash: (ctx, args) => ctx.toolMoveToTrash(args),
       trigger_plugin_command: (ctx, args) => ctx.toolTriggerPluginCommand(args),
+      list_export_formats: (ctx, args) => ctx.toolListExportFormats(args),
+      export_items_citation: (ctx, args) => ctx.toolExportItemsCitation(args),
+      run_batch_plan: (ctx, args) => ctx.toolRunBatchPlan(args),
       finish_task: (ctx, args) => ctx.toolFinishTask(args)
     };
   }

@@ -78,6 +78,19 @@ var ZoteroAssistantConstants = (() => {
   const WEB_FETCH_TIMEOUT_MS = 30000;
   const WEB_FETCH_MAX_BYTES = 512000;
   const WEB_FETCH_MAX_CHARS = 60000;
+  const MAX_EXPORT_ITEMS = 50;
+  const MAX_EXPORT_PER_MODEL_ROUND = 4;
+  const MAX_EXPORT_TEXT_CHARS = 60000;
+  const MAX_BATCH_STEPS = 50;
+  const MAX_BATCH_TOTAL_ITEMS = 500;
+  const BATCH_ALLOWED_TOOLS = new Set([
+    "create_note",
+    "add_tags",
+    "add_items_to_collection",
+    "create_collection",
+    "update_metadata",
+    "move_to_trash"
+  ]);
   const DEBUG_TEXT_LIMIT = 16000;
   const DEBUG_MESSAGE_LIMIT = 6000;
   const DEBUG_MESSAGE_TAIL = 20;
@@ -108,7 +121,8 @@ var ZoteroAssistantConstants = (() => {
     "list_preference_panes",
     "open_zotero_preferences",
     "live_search",
-    "web_fetch"
+    "web_fetch",
+    "list_export_formats"
   ]);
 
   const LOW_RISK_WRITE_TOOLS = new Set([
@@ -580,6 +594,71 @@ var ZoteroAssistantConstants = (() => {
     {
       type: "function",
       function: {
+        name: "list_export_formats",
+        description: "List the citation/export formats available in this Zotero installation (BibTeX, RIS, Zotero RDF, CSL JSON, etc.). Returns translatorID, label, and labelShort for each. Call this before export_items_citation so you can pass an exact format the user asked for.",
+        parameters: { type: "object", properties: {} }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "export_items_citation",
+        description: "Export a set of Zotero items to a citation format (BibTeX, RIS, etc.) and return the exported text in chat. By default this is a read: it returns the text and writes nothing. If saveToPath is provided, the exported text is also written to that file path on disk (high-risk, requires approval). Always call list_export_formats first to get valid format IDs/labels, unless the user named a common format you can match by label (e.g. BibTeX, RIS).",
+        parameters: {
+          type: "object",
+          properties: {
+            itemKeys: {
+              type: "array",
+              items: { type: "string" },
+              description: "Zotero item keys to export. Resolved via the bound task library. Max 50 per call."
+            },
+            format: {
+              type: "string",
+              description: "Citation format: either a translatorID from list_export_formats (preferred) or a translator label/labelShort matched case-insensitively. Examples: '9cb70025-a888-4a29-8acc-30763b5c0394' (BibTeX), 'RIS', 'Zotero RDF'."
+            },
+            saveToPath: {
+              type: "string",
+              description: "Optional absolute or relative file path. If provided, the exported text is written to this path in addition to being returned in chat. Relative paths resolve against the debug output directory. Omit to keep the result in chat only."
+            },
+            reason: {
+              type: "string",
+              description: "One short sentence explaining why the export (and especially the file write, if any) is needed. Shown on the approval card when saveToPath is set."
+            }
+          },
+          required: ["itemKeys", "format"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "run_batch_plan",
+        description: "Execute a batch of write operations whose keys are already resolved (batch create notes, add tags, update metadata, add to collection). Runs all steps locally in one call, which is faster and cheaper than calling the individual tools one-by-one over many model rounds. Before calling, you MUST have resolved every itemKey/collectionKey/parentItemKey via search_items/read_current_context/read_item_fields and filled them into the plan. Cross-step references are NOT supported inside one plan (e.g. creating a collection and then using its key in a later step must be two separate rounds, not one batch). Only concrete write tools are allowed in the plan (no clarification/finish/read/export tools). The whole plan needs approval when it contains any write, and high-risk steps (update_metadata, move_to_trash) are flagged on the approval card.",
+        parameters: {
+          type: "object",
+          properties: {
+            plan: {
+              type: "array",
+              description: "Ordered list of steps. Each step: { tool: string, args: object, label?: string }. tool must be one of the allowed batch tools; args are that tool's parameters with keys already resolved.",
+              items: {
+                type: "object",
+                properties: {
+                  tool: { type: "string" },
+                  args: { type: "object" },
+                  label: { type: "string", description: "Short human-readable description of this step, shown on the approval card." }
+                },
+                required: ["tool", "args"]
+              }
+            },
+            reason: { type: "string", description: "Why this batch is needed, in one short sentence. Shown on the approval card." }
+          },
+          required: ["plan"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
         name: "finish_task",
         description: "End the task ONLY after you have explained results to the user in the selected UI language unless the user explicitly requested another language. summary is mandatory user-facing text (what you tell the user). If you have not sent any other user-visible message this task, summary must be a full explanation (not just 'done').",
         parameters: {
@@ -594,6 +673,6 @@ var ZoteroAssistantConstants = (() => {
   ];
 
   return {
-    HTML_NS, PREF_PREFIX, PREFS, DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_AUDIT_MODEL, DEFAULT_API_MODE, DEFAULT_SAFETY_MODE, DEFAULT_UI_LANGUAGE, DEFAULT_SELECTION_ASK_SHORTCUT, DEFAULT_SESSION_MEMORY_ENABLED, DEFAULT_AUTO_COMPRESSION_ENABLED, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS, DEFAULT_CONTEXT_COMPRESSION_TARGET_CHARS, DEFAULT_CONTEXT_COMPRESSION_KEEP_MESSAGES, DEFAULT_CONTEXT_COMPRESSION_MAX_TOKENS, DEFAULT_CONTEXT_COMPRESSION_TARGET_TOKENS, CHARS_PER_TOKEN_ESTIMATE, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_MESSAGES, CHAT_MINIMIZED_HEIGHT, CHAT_MIN_WIDTH, CHAT_MIN_HEIGHT, CHAT_DEFAULT_WIDTH, CHAT_DEFAULT_HEIGHT, CHAT_DRAWER_WIDTH, CHAT_DRAWER_LOG_PREVIEW, MAX_CHAT_DISPLAY_LOG, MAX_CHAT_DISPLAY_CHARS, COMPRESSED_CONTEXT_MARKER, PREF_PANE_ID, LOG_RETENTION_DAYS, MAX_MODEL_RETRIES, MAX_MODEL_FETCH_MS, AUDIT_FETCH_TIMEOUT_MS, MAX_COLLECTIONS_PER_MODEL_ROUND, MAX_ITEMS_PER_MODEL_ROUND, MAX_CONTEXT_SELECTED_ITEMS, SELECTION_ASK_MAX_CHARS, MAX_TASK_LOOPS, DEFAULT_BROWSE_PAGE_SIZE, MAX_BROWSE_PAGE_SIZE, FULLTEXT_PAGE_CHARS, READER_PAGE_CHARS, READER_NEIGHBOR_PAGE_RADIUS, NOTE_PREVIEW_LENGTH, ABSTRACT_PREVIEW_LENGTH, MAX_OVERVIEW_TAGS, MAX_OVERVIEW_COLLECTIONS, MAX_LIVE_SEARCH_PER_MODEL_ROUND, LEGACY_WEB_SEARCH_TOOL, LIVE_SEARCH_TOOL, MAX_WEB_FETCH_PER_MODEL_ROUND, MAX_WEB_SEARCH_RESULTS, WEB_FETCH_TIMEOUT_MS, WEB_FETCH_MAX_BYTES, WEB_FETCH_MAX_CHARS, DEBUG_TEXT_LIMIT, DEBUG_MESSAGE_LIMIT, DEBUG_MESSAGE_TAIL, COMPRESSION_MESSAGE_SERIALIZE_LIMIT, MEMORY_MESSAGE_SERIALIZE_LIMIT, MEMORY_RECENT_MESSAGE_LIMIT, DEFAULT_PREF_PAGE_SIZE, MAX_PREF_PAGE_SIZE, WEB_SEARCH_USER_AGENT, INDEX_NOTIFIER_TYPES, SESSION_GRANT_TOOL, REQUEST_READ_APPROVAL_TOOL, SENSITIVE_READ_TOOLS, READ_TOOLS, LOW_RISK_WRITE_TOOLS, HIGH_RISK_WRITE_TOOLS, TOOL_DEFINITIONS
+    HTML_NS, PREF_PREFIX, PREFS, DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_AUDIT_MODEL, DEFAULT_API_MODE, DEFAULT_SAFETY_MODE, DEFAULT_UI_LANGUAGE, DEFAULT_SELECTION_ASK_SHORTCUT, DEFAULT_SESSION_MEMORY_ENABLED, DEFAULT_AUTO_COMPRESSION_ENABLED, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS, DEFAULT_CONTEXT_COMPRESSION_TARGET_CHARS, DEFAULT_CONTEXT_COMPRESSION_KEEP_MESSAGES, DEFAULT_CONTEXT_COMPRESSION_MAX_TOKENS, DEFAULT_CONTEXT_COMPRESSION_TARGET_TOKENS, CHARS_PER_TOKEN_ESTIMATE, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_MESSAGES, CHAT_MINIMIZED_HEIGHT, CHAT_MIN_WIDTH, CHAT_MIN_HEIGHT, CHAT_DEFAULT_WIDTH, CHAT_DEFAULT_HEIGHT, CHAT_DRAWER_WIDTH, CHAT_DRAWER_LOG_PREVIEW, MAX_CHAT_DISPLAY_LOG, MAX_CHAT_DISPLAY_CHARS, COMPRESSED_CONTEXT_MARKER, PREF_PANE_ID, LOG_RETENTION_DAYS, MAX_MODEL_RETRIES, MAX_MODEL_FETCH_MS, AUDIT_FETCH_TIMEOUT_MS, MAX_COLLECTIONS_PER_MODEL_ROUND, MAX_ITEMS_PER_MODEL_ROUND, MAX_CONTEXT_SELECTED_ITEMS, SELECTION_ASK_MAX_CHARS, MAX_TASK_LOOPS, DEFAULT_BROWSE_PAGE_SIZE, MAX_BROWSE_PAGE_SIZE, FULLTEXT_PAGE_CHARS, READER_PAGE_CHARS, READER_NEIGHBOR_PAGE_RADIUS, NOTE_PREVIEW_LENGTH, ABSTRACT_PREVIEW_LENGTH, MAX_OVERVIEW_TAGS, MAX_OVERVIEW_COLLECTIONS, MAX_LIVE_SEARCH_PER_MODEL_ROUND, LEGACY_WEB_SEARCH_TOOL, LIVE_SEARCH_TOOL, MAX_WEB_FETCH_PER_MODEL_ROUND, MAX_WEB_SEARCH_RESULTS, WEB_FETCH_TIMEOUT_MS, WEB_FETCH_MAX_BYTES, WEB_FETCH_MAX_CHARS, MAX_EXPORT_ITEMS, MAX_EXPORT_PER_MODEL_ROUND, MAX_EXPORT_TEXT_CHARS, MAX_BATCH_STEPS, MAX_BATCH_TOTAL_ITEMS, BATCH_ALLOWED_TOOLS, DEBUG_TEXT_LIMIT, DEBUG_MESSAGE_LIMIT, DEBUG_MESSAGE_TAIL, COMPRESSION_MESSAGE_SERIALIZE_LIMIT, MEMORY_MESSAGE_SERIALIZE_LIMIT, MEMORY_RECENT_MESSAGE_LIMIT, DEFAULT_PREF_PAGE_SIZE, MAX_PREF_PAGE_SIZE, WEB_SEARCH_USER_AGENT, INDEX_NOTIFIER_TYPES, SESSION_GRANT_TOOL, REQUEST_READ_APPROVAL_TOOL, SENSITIVE_READ_TOOLS, READ_TOOLS, LOW_RISK_WRITE_TOOLS, HIGH_RISK_WRITE_TOOLS, TOOL_DEFINITIONS
   };
 })();

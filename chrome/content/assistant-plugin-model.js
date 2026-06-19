@@ -49,6 +49,10 @@ var ZoteroAssistantPluginModel = (() => {
     WEB_FETCH_TIMEOUT_MS,
     WEB_FETCH_MAX_BYTES,
     WEB_FETCH_MAX_CHARS,
+    MAX_EXPORT_ITEMS,
+    MAX_EXPORT_PER_MODEL_ROUND,
+    MAX_BATCH_STEPS,
+    MAX_BATCH_TOTAL_ITEMS,
     DEBUG_TEXT_LIMIT,
     DEBUG_MESSAGE_LIMIT,
     DEBUG_MESSAGE_TAIL,
@@ -102,6 +106,31 @@ var ZoteroAssistantPluginModel = (() => {
     return result;
   },
 
+  parentPath(path) {
+    const value = String(path || "").trim();
+    if (!value) {
+      return "";
+    }
+    if (typeof PathUtils !== "undefined" && typeof PathUtils.parent === "function") {
+      try {
+        return PathUtils.parent(value);
+      } catch (error) {
+      }
+    }
+    try {
+      const file = this.pathToLocalFile(value);
+      return file && file.parent ? file.parent.path : "";
+    } catch (error) {
+    }
+    const trimmed = value.replace(/[\\/]+$/, "");
+    const index = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
+    if (index <= 0) {
+      return "";
+    }
+    const parent = trimmed.slice(0, index);
+    return /^[A-Za-z]:$/.test(parent) ? parent + "\\" : parent;
+  },
+
   getFetch() {
     const win = this.firstWindow();
     if (win && typeof win.fetch === "function") {
@@ -118,6 +147,26 @@ var ZoteroAssistantPluginModel = (() => {
       .createInstance(Components.interfaces.nsIFile);
     file.initWithPath(path);
     return file;
+  },
+
+  pathToLocalFile(path) {
+    if (Zotero.File && typeof Zotero.File.pathToFile === "function") {
+      return Zotero.File.pathToFile(path);
+    }
+    return this.localFile(path);
+  },
+
+  normalizeLocalPath(path) {
+    const value = String(path || "").trim();
+    if (!value) {
+      return "";
+    }
+    try {
+      const file = this.pathToLocalFile(value);
+      return file && file.path ? file.path : value;
+    } catch (error) {
+      return value;
+    }
   },
 
   toToolCall(action, index) {
@@ -163,6 +212,8 @@ var ZoteroAssistantPluginModel = (() => {
       "Settings writes: use set_preference only for existing non-sensitive Zotero or plugin preferences. Preserve the existing value type. For sensitive settings, call open_zotero_preferences and ask the user to configure them manually.",
       "If a setting change needs restart, call request_zotero_restart with a reason; Zotero restart requires explicit user authorization.",
       `Web: use live_search for public web queries (max ${MAX_LIVE_SEARCH_PER_MODEL_ROUND} per model round). The old tool name web_search is invalid — if you tried web_search, call live_search instead. Use web_fetch to read a specific public URL as markdown (max ${MAX_WEB_FETCH_PER_MODEL_ROUND} per model round). Cite sources in your summary. Do not fetch login-only or private URLs.`,
+      `Citation export: when the user asks to export items as BibTeX, RIS, or another citation format, first call list_export_formats to get the exact translatorID/label, then call export_items_citation with the item keys and the format. export_items_citation returns the exported text in chat by default (a read). Only pass saveToPath when the user explicitly asks to save a file — that turns the call into a high-risk write that needs approval. At most ${MAX_EXPORT_PER_MODEL_ROUND} export calls per model round, each exporting at most ${MAX_EXPORT_ITEMS} items.`,
+      `Batch writes: for a group of write operations whose keys are already resolved (e.g. create one note per selected item, batch add tags, batch update metadata, batch add to a collection), call run_batch_plan once instead of the individual tools one-by-one over many rounds — it is faster and cheaper. Before calling, you MUST resolve every itemKey/collectionKey/parentItemKey via search_items/read_current_context/read_item_fields and fill them into the plan. Cross-step references are NOT supported inside one plan (e.g. creating a collection then using its key in a later step must be two separate rounds, not one batch). Only concrete write tools are allowed in the plan (no clarification/finish/read/export tools). The whole plan needs approval when it contains any write; high-risk steps (update_metadata, move_to_trash) are flagged on the approval card. At most ${MAX_BATCH_STEPS} steps and ${MAX_BATCH_TOTAL_ITEMS} items per batch.`,
       "Low-risk writes may be proposed directly: create small numbers of collections, add tags, create or append notes, and add items to collections.",
       "Do not try to change itemType through update_metadata. If a top-level attachment needs to become a bibliographic parent-child structure, use create_parent_item.",
       "Never remove items from old collections unless explicitly approved. Never permanently delete anything.",
@@ -730,27 +781,41 @@ var ZoteroAssistantPluginModel = (() => {
   },
 
   async writeTextFile(path, text) {
+    const targetPath = this.normalizeLocalPath(path);
+    if (!targetPath) {
+      throw new Error("写入路径为空。");
+    }
     const content = String(text == null ? "" : text);
+    const parent = this.parentPath(targetPath);
+    if (parent) {
+      await this.ensureDirectory(parent);
+    }
+    let file = null;
+    try {
+      file = this.pathToLocalFile(targetPath);
+    } catch (error) {
+      file = null;
+    }
+    if (file && Zotero.File && typeof Zotero.File.putContents === "function") {
+      Zotero.File.putContents(file, content);
+      return;
+    }
+    if (Zotero.File && typeof Zotero.File.putContentsAsync === "function") {
+      await Zotero.File.putContentsAsync(file || targetPath, content, "UTF-8");
+      return;
+    }
     if (typeof IOUtils !== "undefined") {
       if (typeof IOUtils.writeUTF8 === "function") {
-        await IOUtils.writeUTF8(path, content);
+        await IOUtils.writeUTF8(targetPath, content);
         return;
       }
       if (typeof IOUtils.write === "function" && typeof TextEncoder !== "undefined") {
-        await IOUtils.write(path, new TextEncoder().encode(content));
+        await IOUtils.write(targetPath, new TextEncoder().encode(content));
         return;
       }
     }
     if (typeof OS !== "undefined" && OS.File && typeof OS.File.writeAtomic === "function" && typeof TextEncoder !== "undefined") {
-      await OS.File.writeAtomic(path, new TextEncoder().encode(content), { tmpPath: path + ".tmp" });
-      return;
-    }
-    if (Zotero.File && typeof Zotero.File.putContentsAsync === "function") {
-      await Zotero.File.putContentsAsync(path, content);
-      return;
-    }
-    if (Zotero.File && typeof Zotero.File.putContents === "function") {
-      Zotero.File.putContents(path, content);
+      await OS.File.writeAtomic(targetPath, new TextEncoder().encode(content), { tmpPath: targetPath + ".tmp" });
       return;
     }
     throw new Error("当前 Zotero 环境没有可用的文件写入 API。");
@@ -989,22 +1054,27 @@ var ZoteroAssistantPluginModel = (() => {
     if (!dirPath) {
       throw new Error("未配置调试输出目录。");
     }
-    if (typeof IOUtils !== "undefined" && typeof IOUtils.makeDirectory === "function") {
-      await IOUtils.makeDirectory(dirPath, { createAncestors: true, ignoreExisting: true });
-      return;
-    }
-    const file = this.localFile(dirPath);
-    if (file.exists()) {
-      if (!file.isDirectory()) {
-        throw new Error("调试输出路径不是目录。");
+    try {
+      const file = this.pathToLocalFile(dirPath);
+      if (file.exists()) {
+        if (!file.isDirectory()) {
+          throw new Error("调试输出路径不是目录。");
+        }
+        return;
       }
+      const parent = file.parent;
+      if (parent && !parent.exists()) {
+        await this.ensureDirectory(parent.path);
+      }
+      file.create(Components.interfaces.nsIFile.DIRECTORY_TYPE, 0o755);
       return;
+    } catch (fileError) {
+      if (typeof IOUtils !== "undefined" && typeof IOUtils.makeDirectory === "function") {
+        await IOUtils.makeDirectory(dirPath, { createAncestors: true, ignoreExisting: true });
+        return;
+      }
+      throw fileError;
     }
-    const parent = file.parent;
-    if (parent && !parent.exists()) {
-      await this.ensureDirectory(parent.path);
-    }
-    file.create(Components.interfaces.nsIFile.DIRECTORY_TYPE, 0o755);
   },
 
   estimateMessageTokens(message) {

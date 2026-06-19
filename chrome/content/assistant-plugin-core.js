@@ -377,6 +377,21 @@ var ZoteroAssistantPluginCore = (() => {
           await item.saveTx();
         }
       }
+    } else if (op.type === "delete_export_file") {
+      try {
+        if (typeof this.pathToLocalFile === "function") {
+          const file = this.pathToLocalFile(op.path);
+          if (file.exists()) {
+            file.remove(false);
+          }
+        } else if (typeof IOUtils !== "undefined" && typeof IOUtils.remove === "function") {
+          await IOUtils.remove(op.path);
+        } else if (typeof OS !== "undefined" && OS.File && typeof OS.File.remove === "function") {
+          await OS.File.remove(op.path);
+        }
+      } catch (error) {
+        this.log("undo.delete_export_file_failed", { path: op.path, error: String(error) });
+      }
     }
     this.log("undo.finished", op);
     if (this.task && this.task.libraryID) {

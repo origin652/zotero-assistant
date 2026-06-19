@@ -49,6 +49,12 @@ var ZoteroAssistantPluginLibrary = (() => {
     WEB_FETCH_TIMEOUT_MS,
     WEB_FETCH_MAX_BYTES,
     WEB_FETCH_MAX_CHARS,
+    MAX_EXPORT_ITEMS,
+    MAX_EXPORT_PER_MODEL_ROUND,
+    MAX_EXPORT_TEXT_CHARS,
+    MAX_BATCH_STEPS,
+    MAX_BATCH_TOTAL_ITEMS,
+    BATCH_ALLOWED_TOOLS,
     DEBUG_TEXT_LIMIT,
     DEBUG_MESSAGE_LIMIT,
     DEBUG_MESSAGE_TAIL,
@@ -590,6 +596,10 @@ var ZoteroAssistantPluginLibrary = (() => {
       return false;
     }
     try {
+      if (typeof this.pathToLocalFile === "function") {
+        const file = this.pathToLocalFile(path);
+        return file.exists();
+      }
       if (typeof OS !== "undefined" && OS.File && typeof OS.File.exists === "function") {
         return await OS.File.exists(path);
       }
@@ -1274,6 +1284,410 @@ var ZoteroAssistantPluginLibrary = (() => {
     this.undoStack.push({ type: "trash_item", itemID: note.id, summary: "撤销创建笔记" });
     this.markLibraryIndexDirty(this.currentTaskLibraryID());
     return { ok: true, noteKey: note.key };
+  },
+
+  async exportItemsToString(items, translator) {
+    return new Promise((resolve, reject) => {
+      try {
+        const translation = new Zotero.Translate.Export();
+        translation.setItems(items.slice());
+        translation.setTranslator(translator);
+        translation.setHandler("done", (_obj, worked) => {
+          if (!worked) {
+            reject(new Error("导出翻译器报告失败。"));
+            return;
+          }
+          resolve(typeof translation.string === "string" ? translation.string : String(translation.string || ""));
+        });
+        translation.setHandler("error", (_obj, error) => {
+          reject(error || new Error("导出翻译器报告未知错误。"));
+        });
+        const promise = translation.translate();
+        if (promise && typeof promise.catch === "function") {
+          promise.catch((error) => reject(error));
+        }
+      } catch (error) {
+        reject(error);
+      }
+    });
+  },
+
+  async exportItemsViaString(items, translatorID, translatorLabel) {
+    // Fallback when the in-memory translate() path and FileExporter.exportToBlob
+    // are unavailable: export to a temp file under the debug dir, read it back,
+    // then delete it. Returns the exported text or "" on failure.
+    const base = this.getDebugOutputDir && this.getDebugOutputDir();
+    if (!base) {
+      return "";
+    }
+    const safeName = String(translatorLabel || "export").replace(/[^A-Za-z0-9._-]/g, "").slice(0, 24) || "export";
+    const stamp = String((this.task && this.task.loopCount) || 0) + "-" + String(items.length);
+    const tmpPath = this.joinPath(base, "__za_export_tmp_" + safeName + "_" + stamp + ".txt");
+    try {
+      const translation = new Zotero.Translate.Export();
+      translation.setItems(items.slice());
+      translation.setTranslator(translatorID);
+      const location = Zotero.File && typeof Zotero.File.pathToFile === "function"
+        ? Zotero.File.pathToFile(tmpPath)
+        : tmpPath;
+      translation.setLocation(location);
+      await translation.translate();
+      let content = "";
+      if (Zotero.File && typeof Zotero.File.getContentsAsync === "function") {
+        content = await Zotero.File.getContentsAsync(tmpPath);
+      }
+      if (typeof content !== "string") {
+        content = String(content || "");
+      }
+      return content;
+    } catch (error) {
+      this.log("export.fallback_failed", { translatorID, error: String(error) });
+      return "";
+    } finally {
+      try {
+        if (typeof this.pathToLocalFile === "function") {
+          const file = this.pathToLocalFile(tmpPath);
+          if (file.exists()) {
+            file.remove(false);
+          }
+        } else if (typeof IOUtils !== "undefined" && typeof IOUtils.remove === "function") {
+          await IOUtils.remove(tmpPath);
+        } else if (typeof OS !== "undefined" && OS.File && typeof OS.File.remove === "function") {
+          await OS.File.remove(tmpPath);
+        }
+      } catch (cleanupError) {
+        // best-effort; tmp file may not exist
+      }
+    }
+  },
+
+  async toolListExportFormats(args) {
+    if (!this.task) {
+      return { ok: false, error: "没有活动任务。" };
+    }
+    let translators = [];
+    try {
+      const all = await Zotero.Translators.getAllForType("export");
+      translators = Array.isArray(all) ? all : [];
+    } catch (error) {
+      return { ok: false, error: `无法枚举导出翻译器：${error}` };
+    }
+    const formats = translators
+      .map((t) => ({
+        translatorID: safeCall(() => t.translatorID) || "",
+        label: safeCall(() => t.label) || "",
+        labelShort: safeCall(() => t.labelShort) || ""
+      }))
+      .filter((f) => f.translatorID);
+    this.log("export.list_formats", { count: formats.length });
+    return { ok: true, count: formats.length, formats };
+  },
+
+  resolveExportPath(rawPath) {
+    const p = String(rawPath || "").trim().replace(/^["']|["']$/g, "");
+    if (!p) {
+      return null;
+    }
+    const isAbsolute = /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("/");
+    if (isAbsolute) {
+      return typeof this.normalizeLocalPath === "function" ? this.normalizeLocalPath(p) : p;
+    }
+    const base = this.getDebugOutputDir && this.getDebugOutputDir();
+    if (!base) {
+      return null;
+    }
+    const parts = p.split(/[\\/]+/).filter(Boolean);
+    const resolved = this.joinPath(base, ...parts);
+    return typeof this.normalizeLocalPath === "function" ? this.normalizeLocalPath(resolved) : resolved;
+  },
+
+  async toolExportItemsCitation(args) {
+    if (!this.task) {
+      return { ok: false, error: "没有活动任务。" };
+    }
+    const keys = Array.isArray(args.itemKeys) ? args.itemKeys.filter(Boolean) : [];
+    if (!keys.length) {
+      return { ok: false, error: "export_items_citation 需要至少一个 itemKey。" };
+    }
+    if (keys.length > MAX_EXPORT_ITEMS) {
+      return { ok: false, error: `单次最多导出 ${MAX_EXPORT_ITEMS} 个条目，本次请求 ${keys.length} 个。请分批或缩小范围。` };
+    }
+    if ((this.task.roundExportCount || 0) >= MAX_EXPORT_PER_MODEL_ROUND) {
+      return { ok: false, error: `本轮模型调用已达到最多 ${MAX_EXPORT_PER_MODEL_ROUND} 次导出限制。请下一轮再导出。` };
+    }
+
+    const items = [];
+    const missing = [];
+    for (const key of keys) {
+      const item = await this.getItemByKey(key);
+      if (item) {
+        const type = safeCall(() => item.itemType) || "";
+        if (type === "attachment" || type === "note") {
+          continue;
+        }
+        items.push(item);
+      } else {
+        missing.push(key);
+      }
+    }
+    if (!items.length) {
+      return { ok: false, error: `未能解析任何可导出条目。缺失或为附件/笔记的 key：${missing.join(", ") || "(无)"}` };
+    }
+
+    const wanted = String(args.format || "").trim();
+    if (!wanted) {
+      return { ok: false, error: "export_items_citation 需要指定 format（translatorID 或 label）。请先调用 list_export_formats。" };
+    }
+    let translator = null;
+    let translatorList = [];
+    try {
+      const all = await Zotero.Translators.getAllForType("export");
+      translatorList = Array.isArray(all) ? all : [];
+      const lower = wanted.toLowerCase();
+      translator =
+        translatorList.find((t) => safeCall(() => t.translatorID) === wanted) ||
+        translatorList.find((t) => String(safeCall(() => t.label) || "").toLowerCase() === lower) ||
+        translatorList.find((t) => String(safeCall(() => t.labelShort) || "").toLowerCase() === lower);
+    } catch (error) {
+      return { ok: false, error: `查找翻译器失败：${error}` };
+    }
+    if (!translator) {
+      return { ok: false, error: `未找到匹配的导出格式：“${wanted}”。请调用 list_export_formats 查看可用格式。` };
+    }
+    const translatorID = safeCall(() => translator.translatorID) || "";
+    const translatorLabel = safeCall(() => translator.label) || translatorID;
+
+    let text = "";
+    let usedFallback = false;
+    let memoryError = null;
+    try {
+      text = await this.exportItemsToString(items, translator);
+    } catch (error) {
+      memoryError = error;
+    }
+
+    // Many translators only write to a file and return "" when no location is
+    // set (e.g. BibLaTeX). Fall back to exporting via a temp file whenever the
+    // in-memory path returned nothing OR threw.
+    if (!text) {
+      try {
+        const exportText = await this.exportItemsViaString(items, translatorID, translatorLabel);
+        if (exportText) {
+          text = exportText;
+          usedFallback = true;
+        } else if (memoryError) {
+          return { ok: false, error: `导出失败且当前环境无可用回退。Path A 错误：${memoryError}` };
+        }
+      } catch (fallbackError) {
+        return { ok: false, error: `导出失败（Path A: ${memoryError || "返回空内容"}; 回退：${fallbackError}）。` };
+      }
+    }
+
+    if (!text) {
+      return { ok: false, error: `翻译器 “${translatorLabel}” 返回了空内容。` };
+    }
+
+    let savedPath = null;
+    const wantsSave = !!String(args.saveToPath || "").trim();
+    if (wantsSave) {
+      const rawPath = String(args.saveToPath).trim();
+      const path = this.resolveExportPath(rawPath);
+      if (!path) {
+        return { ok: false, error: `无效或不可写的导出路径：“${rawPath}”。` };
+      }
+      if (await this.pathExists(path)) {
+        return { ok: false, error: `目标文件已存在，拒绝覆盖：${path}。请指定一个新路径。` };
+      }
+      try {
+        await this.writeTextFile(path, text);
+        savedPath = path;
+        this.undoStack.push({
+          type: "delete_export_file",
+          path,
+          summary: `撤销导出文件写入：${path}`
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: `导出文本已生成但写入文件失败：${error}`,
+          text: truncateText(text, MAX_EXPORT_TEXT_CHARS),
+          translatorID,
+          format: translatorLabel,
+          itemCount: items.length
+        };
+      }
+    }
+
+    this.task.roundExportCount = (this.task.roundExportCount || 0) + 1;
+    this.task.exportCount = (this.task.exportCount || 0) + 1;
+    this.log("export.items", {
+      translatorID,
+      translatorLabel,
+      itemCount: items.length,
+      chars: text.length,
+      saved: !!savedPath,
+      path: savedPath || "",
+      fallback: usedFallback,
+      missingKeys: missing
+    });
+
+    const returnedText =
+      text.length > MAX_EXPORT_TEXT_CHARS
+        ? text.slice(0, MAX_EXPORT_TEXT_CHARS) +
+          "\n\n…（导出文本已截断，完整内容已" +
+          (savedPath ? `写入 ${savedPath}` : "在内存中") +
+          "）"
+        : text;
+
+    return {
+      ok: true,
+      format: translatorLabel,
+      translatorID,
+      itemCount: items.length,
+      missingKeys: missing.length ? missing : undefined,
+      savedToPath: savedPath || undefined,
+      text: returnedText,
+      truncated: text.length > MAX_EXPORT_TEXT_CHARS,
+      fallbackUsed: usedFallback,
+      instruction: wantsSave
+        ? "已将导出文本写入指定路径，同时将（可能截断的）文本附在此结果中供你向用户展示。"
+        : "将上方导出文本展示给用户；如用户希望保存为文件，再次调用本工具并带上 saveToPath。"
+    };
+  },
+
+  validateBatchPlan(plan) {
+    if (!Array.isArray(plan)) {
+      return { ok: false, error: "run_batch_plan 需要一个 plan 数组。" };
+    }
+    if (!plan.length) {
+      return { ok: false, error: "plan 为空，无可执行步骤。" };
+    }
+    if (plan.length > MAX_BATCH_STEPS) {
+      return { ok: false, error: `批量计划最多 ${MAX_BATCH_STEPS} 步，本次 ${plan.length} 步。请拆分。` };
+    }
+    let createCollectionSteps = 0;
+    let totalItems = 0;
+    let hasHighRisk = false;
+    const violations = [];
+    for (let i = 0; i < plan.length; i++) {
+      const step = plan[i];
+      if (!step || typeof step !== "object") {
+        violations.push(`第 ${i + 1} 步不是对象。`);
+        continue;
+      }
+      const tool = String(step.tool || "");
+      if (!BATCH_ALLOWED_TOOLS.has(tool)) {
+        violations.push(`第 ${i + 1} 步工具 “${tool}” 不在批次允许列表内。`);
+        continue;
+      }
+      if (!step.args || typeof step.args !== "object") {
+        violations.push(`第 ${i + 1} 步缺少 args 对象。`);
+        continue;
+      }
+      if (HIGH_RISK_WRITE_TOOLS.has(tool)) {
+        hasHighRisk = true;
+      }
+      if (tool === "create_collection") {
+        createCollectionSteps++;
+      }
+      const itemKeys = Array.isArray(step.args.itemKeys) ? step.args.itemKeys : [];
+      totalItems += itemKeys.length;
+      if (step.args.itemKey) {
+        totalItems += 1;
+      }
+      if (step.args.parentItemKey) {
+        totalItems += 1;
+      }
+    }
+    if (violations.length) {
+      return { ok: false, error: `批量计划校验失败：${violations.join("；")}` };
+    }
+    if (createCollectionSteps > MAX_COLLECTIONS_PER_MODEL_ROUND) {
+      return {
+        ok: false,
+        error: `批量计划含 ${createCollectionSteps} 个 create_collection 步，超过单轮上限 ${MAX_COLLECTIONS_PER_MODEL_ROUND}。请拆分到不同轮次。`
+      };
+    }
+    if (totalItems > MAX_BATCH_TOTAL_ITEMS) {
+      return {
+        ok: false,
+        error: `批量计划涉及约 ${totalItems} 个条目，超过上限 ${MAX_BATCH_TOTAL_ITEMS}。请缩小范围。`
+      };
+    }
+    return {
+      ok: true,
+      stepCount: plan.length,
+      totalItems,
+      hasWrite: true,
+      hasHighRisk
+    };
+  },
+
+  async toolRunBatchPlan(args) {
+    if (!this.task) {
+      return { ok: false, error: "没有活动任务。" };
+    }
+    const validation = this.validateBatchPlan(args && args.plan);
+    if (!validation.ok) {
+      this.log("batch.rejected", { reason: validation.error });
+      return { ok: false, error: validation.error };
+    }
+    const plan = args.plan;
+    const results = [];
+    let succeeded = 0;
+    let failed = 0;
+    for (let i = 0; i < plan.length; i++) {
+      const step = plan[i];
+      const tool = step.tool;
+      let result;
+      try {
+        result = await this.executeTool(tool, step.args);
+      } catch (error) {
+        result = { ok: false, error: String(error), source: "batch_step", stepIndex: i };
+      }
+      const entry = {
+        index: i + 1,
+        tool,
+        label: step.label || "",
+        ok: !!(result && result.ok)
+      };
+      if (!entry.ok) {
+        entry.error = (result && result.error) || "步骤执行失败。";
+        failed++;
+      } else {
+        succeeded++;
+        if (result) {
+          const compact = {};
+          for (const k of ["noteKey", "collectionKey", "trashedCount", "addedCount", "tagsAdded"]) {
+            if (result[k] !== undefined) {
+              compact[k] = result[k];
+            }
+          }
+          if (Object.keys(compact).length) {
+            entry.result = compact;
+          }
+        }
+      }
+      results.push(entry);
+    }
+    this.log("batch.executed", {
+      stepCount: plan.length,
+      succeeded,
+      failed,
+      hasHighRisk: validation.hasHighRisk
+    });
+    return {
+      ok: true,
+      total: plan.length,
+      succeeded,
+      failed,
+      results,
+      hasHighRisk: validation.hasHighRisk,
+      instruction:
+        failed > 0
+          ? `批量执行完成：成功 ${succeeded} 步，失败 ${failed} 步。请向用户汇报每步成败，并说明失败步骤的原因。`
+          : `批量执行完成：${succeeded} 步全部成功。请向用户汇报结果。`
+    };
   },
 
   hostnameMatchesDomain(hostname, domain) {
