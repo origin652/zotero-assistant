@@ -85,7 +85,7 @@ var ZoteroAssistantPluginUiDom = (() => {
       node.className = className;
     }
     if (text) {
-      node.textContent = text;
+      node.textContent = this.uiText(text);
     }
     return node;
   },
@@ -96,7 +96,7 @@ var ZoteroAssistantPluginUiDom = (() => {
 
   panel(doc, title) {
     const panel = this.el(doc, "section", "zotero-assistant-panel", "");
-    const header = this.el(doc, "div", "za-panel-header", title);
+    const header = this.el(doc, "div", "za-panel-header", this.uiText(title));
     const body = this.el(doc, "div", "zotero-assistant-panel-body", "");
     panel.appendChild(header);
     panel.appendChild(body);
@@ -133,7 +133,7 @@ var ZoteroAssistantPluginUiDom = (() => {
 
     if (options.badge) {
       const badge = this.html(doc, "span");
-      badge.textContent = options.badge;
+      badge.textContent = this.uiText(options.badge);
       badge.style.cssText = [
         "display:inline-flex",
         "align-items:center",
@@ -150,7 +150,7 @@ var ZoteroAssistantPluginUiDom = (() => {
 
     if (options.title) {
       const title = this.html(doc, "div");
-      title.textContent = options.title;
+      title.textContent = this.uiText(options.title);
       title.style.cssText = "font-weight:700;line-height:1.35;min-width:0;";
       titleWrap.appendChild(title);
     }
@@ -166,7 +166,7 @@ var ZoteroAssistantPluginUiDom = (() => {
 
     if (options.detail) {
       const detail = this.html(doc, "div");
-      detail.textContent = options.detail;
+      detail.textContent = this.uiText(options.detail);
       detail.style.cssText = "white-space:pre-wrap;line-height:1.45;";
       toast.appendChild(detail);
     }
@@ -246,7 +246,7 @@ var ZoteroAssistantPluginUiDom = (() => {
   actionButton(doc, label, variant, onClick) {
     const button = this.html(doc, "button");
     button.type = "button";
-    const text = String(label == null ? "" : label);
+    const text = this.uiText(label);
     button.textContent = text;
     button.setAttribute("aria-label", text);
     button.className = `za-btn za-btn-${variant || "secondary"}`;
@@ -354,7 +354,7 @@ var ZoteroAssistantPluginUiDom = (() => {
     const reasoning = String(options.reasoning || "").trim();
     if (reasoning) {
       const details = this.el(bubble.ownerDocument, "details", "za-chat-reasoning", "");
-      const summary = this.el(bubble.ownerDocument, "summary", "za-chat-reasoning-summary", "思考过程");
+      const summary = this.el(bubble.ownerDocument, "summary", "za-chat-reasoning-summary", this.t("reasoningLabel"));
       const reasoningBody = this.el(bubble.ownerDocument, "div", "za-chat-reasoning-body za-markdown", "");
       this.renderMarkdownInto(reasoningBody, reasoning);
       details.appendChild(summary);

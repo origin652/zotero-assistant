@@ -110,7 +110,7 @@ var ZoteroAssistantPluginModel = (() => {
     if (typeof fetch === "function") {
       return fetch;
     }
-    throw new Error("当前 Zotero 环境没有可用的 fetch 实现。");
+    throw new Error(this.t("fetchUnavailable"));
   },
 
   localFile(path) {
@@ -146,6 +146,7 @@ var ZoteroAssistantPluginModel = (() => {
   systemPrompt() {
     return [
       "You are Zotero Assistant running inside a Zotero desktop plugin.",
+      this.selectedLanguageInstruction(),
       "Never assume a default task. Wait for and follow the user's explicit task.",
       "If the task is ambiguous in a high-impact way, call request_clarification before changing Zotero.",
       "Each task is bound to the Zotero library that was active when the task started. Do not silently switch libraries mid-task.",
@@ -170,7 +171,7 @@ var ZoteroAssistantPluginModel = (() => {
       "{\"tool_calls\":[{\"name\":\"read_library_overview\",\"arguments\":{}}]}",
       "{\"actions\":[{\"tool\":\"finish_task\",\"args\":{\"summary\":\"...\"}}]}",
       "{\"name\":\"finish_task\",\"arguments\":{\"summary\":\"...\"}}",
-      "User-visible messages (mandatory): You MUST communicate with the user in Chinese before ending. Either send a normal assistant message (plain text in the same turn as tools, or request_clarification), or end with finish_task.summary that clearly explains outcomes. Never end a task with only silent tool calls and an empty or one-word summary.",
+      "User-visible messages (mandatory): You MUST communicate with the user in the selected UI language before ending, unless the user explicitly asks for another language. Either send a normal assistant message (plain text in the same turn as tools, or request_clarification), or end with finish_task.summary that clearly explains outcomes. Never end a task with only silent tool calls and an empty or one-word summary.",
       "finish_task is rejected if summary is missing/too short, or if this task has zero prior user-facing messages and summary is under 24 characters — in that case, reply to the user first, then call finish_task again.",
       "finish_task.summary must contain the actual result text. Do not end with placeholder introductions such as '摘要如下' or '结果如下' unless the detailed content is included in the same summary."
     ].join("\n");
@@ -224,7 +225,7 @@ var ZoteroAssistantPluginModel = (() => {
   async callModel(messages, options = {}) {
     const apiKey = Zotero.Prefs.get(PREFS.apiKey, true);
     if (!apiKey) {
-      throw new Error("尚未配置 API key。");
+      throw new Error(this.t("apiKeyMissing"));
     }
     const baseURL = (Zotero.Prefs.get(PREFS.baseURL, true) || DEFAULT_BASE_URL).trim();
     const modelOverride = options.modelOverride && String(options.modelOverride).trim();
@@ -275,7 +276,7 @@ var ZoteroAssistantPluginModel = (() => {
       } catch (error) {
         const errorMessage = error && error.source === "model"
           ? `${variant.label} ${error.message || error}`
-          : `${variant.label} 请求失败：${error}`;
+          : this.t("modelRequestFailed", { variant: variant.label, error });
         lastError = this.makeModelError(errorMessage, {
           ...debugInfo,
           transportError: String(error),
@@ -295,14 +296,18 @@ var ZoteroAssistantPluginModel = (() => {
       debugInfo.response.rawTextLength = rawText.length;
       debugInfo.response.rawTextPreview = truncateText(rawText, DEBUG_TEXT_LIMIT);
       if (!response.ok) {
-        lastError = this.makeModelError(`${variant.label} 请求返回 HTTP ${response.status}${rawText ? `: ${rawText.slice(0, 300)}` : ""}`, debugInfo);
+        lastError = this.makeModelError(this.t("modelHttpError", {
+          variant: variant.label,
+          status: response.status,
+          detail: rawText ? `: ${rawText.slice(0, 300)}` : ""
+        }), debugInfo);
         continue;
       }
       let json = null;
       try {
         json = rawText ? JSON.parse(rawText) : null;
       } catch (error) {
-        lastError = this.makeModelError(`${variant.label} 请求成功，但返回不是合法 JSON。`, {
+        lastError = this.makeModelError(this.t("modelInvalidJson", { variant: variant.label }), {
           ...debugInfo,
           parseError: String(error)
         });
@@ -320,9 +325,9 @@ var ZoteroAssistantPluginModel = (() => {
         variant: variant.label,
         preview: safeJSONStringify(json, 800)
       });
-      lastError = this.makeModelError(`${variant.label} 请求成功，但响应无法识别。`, debugInfo);
+      lastError = this.makeModelError(this.t("modelUnrecognizedResponse", { variant: variant.label }), debugInfo);
     }
-    throw lastError || this.makeModelError("模型响应无法识别。请检查 endpoint 路径、模型返回格式，或让模型返回文本、tool_calls、或 JSON 工具计划。", {
+    throw lastError || this.makeModelError(this.t("modelUnrecognizedResponseHelp"), {
       endpointMode: endpoint.mode,
       endpointUrl: endpoint.url,
       model,
@@ -348,8 +353,8 @@ var ZoteroAssistantPluginModel = (() => {
       "mid: somewhat risky, large scope, or only loosely tied to the goal — worth a human glance.",
       "high: likely destructive, irreversible, large-scale, or off-goal — must be authorized by a human.",
       "Respond with ONE line of JSON only, no prose, no code fences:",
-      "{\"level\":\"low|mid|high\",\"reason\":\"一句中文说明\"}",
-      "Keep reason under 40 Chinese characters."
+      this.t("auditReasonInstruction"),
+      this.t("auditReasonLengthInstruction")
     ].join("\n");
   },
 
@@ -369,7 +374,7 @@ var ZoteroAssistantPluginModel = (() => {
       safetyMode: "review"
     };
     let level = "high";
-    let reason = "审核不可用，需人工确认。";
+    let reason = this.t("auditUnavailable");
     let ok = false;
     try {
       const auditPromise = this.callModelWithRetries(
@@ -389,7 +394,7 @@ var ZoteroAssistantPluginModel = (() => {
       });
       const raw = await Promise.race([auditPromise, timeoutPromise]);
       if (raw === "__timeout__") {
-        throw new Error(`审核超时（${AUDIT_FETCH_TIMEOUT_MS}ms）`);
+        throw new Error(this.t("auditTimeout", { ms: AUDIT_FETCH_TIMEOUT_MS }));
       }
       const parsed = this.parseAuditResponse(raw && raw.content);
       if (parsed) {
@@ -397,11 +402,11 @@ var ZoteroAssistantPluginModel = (() => {
         reason = parsed.reason || reason;
         ok = true;
       } else {
-        throw new Error("审核返回无法解析。");
+        throw new Error(this.t("auditUnparseable"));
       }
     } catch (error) {
       level = "high";
-      reason = `审核失败：${(error && error.message) || error}。需人工确认。`;
+      reason = this.t("auditFailedReason", { error: (error && error.message) || error });
       ok = false;
     }
     this.log("ai_review", { toolName, argsSummary, taskContext, level, reason, ok });
@@ -1220,7 +1225,7 @@ var ZoteroAssistantPluginModel = (() => {
       });
       if (result && result.ok === false) {
         const retryInstruction = result.validationError
-          ? `The ${name} call was rejected because its user-facing summary was incomplete: ${result.error || "unknown error"}. Continue with a substantive Chinese answer that includes actual results, then call finish_task again with that complete summary.`
+          ? `The ${name} call was rejected because its user-facing summary was incomplete: ${result.error || "unknown error"}. Continue with a substantive answer in the selected UI language that includes actual results, then call finish_task again with that complete summary.`
           : `The tool ${name} failed with error: ${result.error || "unknown error"}. Adjust the plan and retry. Consecutive tool failures: ${this.task.consecutiveToolFailures || 1}/3.`;
         this.task.messages.push({
           role: "system",
@@ -1235,7 +1240,7 @@ var ZoteroAssistantPluginModel = (() => {
         if (!result.validationError && (this.task.consecutiveToolFailures || 0) >= 3) {
           this.task.status = "paused";
           this.task.phase = "tool_failed";
-          this.task.error = `工具连续失败 3 次：${name} - ${result.error || "unknown error"}`;
+          this.task.error = this.t("toolConsecutiveFailures", { toolName: name, error: result.error || "unknown error" });
           this.log("task.paused", {
             id: this.task.id,
             reason: this.task.error,
@@ -1536,15 +1541,15 @@ var ZoteroAssistantPluginModel = (() => {
       if (this.task.emptyAssistantTurnCount < 2) {
         this.task.messages.push({
           role: "system",
-          content: "Your previous response had no visible text and no tool calls. Do not return an empty message. Continue by either calling tools or calling finish_task with a clear Chinese user-facing summary."
+          content: "Your previous response had no visible text and no tool calls. Do not return an empty message. Continue by either calling tools or calling finish_task with a clear user-facing summary in the selected UI language."
         });
         this.renderAll();
         return;
       }
       this.task.status = "paused";
       this.task.phase = "empty_response";
-      this.task.error = "模型连续没有返回可显示文本，也没有返回工具调用。";
-      this.pushChatTurnReadable(`【任务已暂停】${this.task.error}`);
+      this.task.error = this.t("emptyAssistantResponse");
+      this.pushChatTurnReadable(this.t("pausedPrefix", { detail: this.task.error }));
       this.flushChatTurnToDisplay();
       this.log("task.paused", { id: this.task.id, reason: "empty_response" });
       await this.maybeWriteDebugReport("empty_response", {
@@ -1556,7 +1561,9 @@ var ZoteroAssistantPluginModel = (() => {
       return;
     }
     const state = this.firstState();
-    const needsUserReply = /[?？]\s*$/.test(text) || /请问|需要你|请提供|请说明|告诉我/.test(text);
+    const needsUserReply = /[?？]\s*$/.test(text)
+      || /请问|需要你|请提供|请说明|告诉我/.test(text)
+      || /\b(please provide|please specify|please clarify|tell me|could you|would you|need you to|i need)\b/i.test(text);
     this.task.emptyAssistantTurnCount = 0;
     this.task.summary = text;
     this.task.pendingApproval = null;
@@ -1571,7 +1578,7 @@ var ZoteroAssistantPluginModel = (() => {
       this.task.phase = "awaiting_finish_task";
       this.task.messages.push({
         role: "system",
-        content: "Plain assistant text was received, but the task must not end unless you explicitly call finish_task. If more work remains, continue with tools. If the task is complete, call finish_task with a concise final summary."
+        content: "Plain assistant text was received, but the task must not end unless you explicitly call finish_task. If more work remains, continue with tools. If the task is complete, call finish_task with a concise final summary in the selected UI language."
       });
     }
     this.flushChatTurnToDisplay();

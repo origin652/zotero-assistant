@@ -1032,7 +1032,7 @@ var ZoteroAssistantPluginLibrary = (() => {
         this.task.phase = "must_message_user";
         this.task.messages.push({
           role: "system",
-          content: `${rule.error} Do not call finish_task again until the user has a proper Chinese explanation.`
+          content: `${rule.error} Do not call finish_task again until the user has a proper explanation in the selected UI language.`
         });
         this.log("finish_task.rejected", { reason: rule.error, userFacingMessageCount: this.task.userFacingMessageCount || 0 });
       }
@@ -2253,8 +2253,8 @@ var ZoteroAssistantPluginLibrary = (() => {
     this.task.phase = "needs_user";
     this.task.pendingApproval = null;
     const questionText = [
-      args.question || "需要你补充任务目标。",
-      args.recommendedAnswer ? `推荐：${args.recommendedAnswer}` : ""
+      args.question || this.t("needTaskClarification"),
+      args.recommendedAnswer ? this.t("recommendedAnswer", { answer: args.recommendedAnswer }) : ""
     ].filter(Boolean).join("\n");
     this.flushChatTurnToDisplay();
     const state = this.firstState();

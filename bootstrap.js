@@ -6,6 +6,7 @@ function loadAssistantScripts(rootURI) {
   const base = rootURI + "chrome/content/";
   const files = [
     "assistant-constants.js",
+    "assistant-i18n.js",
     "assistant-util.js",
     "assistant-styles.js",
     "assistant-tool-dispatch.js",

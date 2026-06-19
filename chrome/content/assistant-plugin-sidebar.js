@@ -214,7 +214,7 @@ var ZoteroAssistantPluginSidebar = (() => {
     const launcher = this.html(doc, "button");
     launcher.id = "zotero-assistant-launcher";
     launcher.type = "button";
-    launcher.textContent = "助手";
+    launcher.textContent = this.uiText("助手");
     launcher.style.cssText = [
       "position:absolute",
       "top:50%",
@@ -259,7 +259,7 @@ var ZoteroAssistantPluginSidebar = (() => {
     }
     const item = doc.createXULElement ? doc.createXULElement("menuitem") : doc.createElement("menuitem");
     item.setAttribute("id", "zotero-assistant-tools-menu");
-    item.setAttribute("label", "Zotero 助手");
+    item.setAttribute("label", this.uiText("Zotero 助手"));
     item.addEventListener("command", () => this.toggleChatPanelForWindow(win));
     toolsMenu.appendChild(item);
     return item;
@@ -303,7 +303,7 @@ var ZoteroAssistantPluginSidebar = (() => {
     for (const pane of plugin) {
       push(pane, "plugin");
     }
-    panes.sort((a, b) => a.label.localeCompare(b.label, "zh-Hans-CN"));
+    panes.sort((a, b) => a.label.localeCompare(b.label, this.compareLocale()));
     return {
       panes: panes.slice(0, limit),
       count: Math.min(panes.length, limit),
@@ -368,12 +368,13 @@ var ZoteroAssistantPluginSidebar = (() => {
         }
         Zotero.Utilities.Internal.openPreferences(resolved.id, openOpts);
       } else {
-        return { ok: false, error: "当前 Zotero 环境不支持 openPreferences。" };
+        return { ok: false, error: this.t("openPreferencesUnsupported") };
       }
     } catch (error) {
       Zotero.debug(`Zotero Assistant failed to open preferences: ${error}`);
       return { ok: false, error: String(error) };
     }
+    this.schedulePreferencePaneLocalizationPass();
     return { ok: true, pane_id: resolved.id, label: resolved.label };
   },
 
@@ -389,7 +390,7 @@ var ZoteroAssistantPluginSidebar = (() => {
     }
     return {
       ok: false,
-      error: `未找到设置面板 id「${raw}」。请先调用 list_preference_panes 查看已注册的 pane id。`
+      error: this.t("prefPaneMissing", { id: raw })
     };
   }
 };

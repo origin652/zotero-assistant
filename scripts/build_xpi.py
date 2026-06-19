@@ -16,6 +16,7 @@ INCLUDED = [
     "icons/zotero-assistant-icon-128.png",
     "chrome/content/preferences.xhtml",
     "chrome/content/assistant-constants.js",
+    "chrome/content/assistant-i18n.js",
     "chrome/content/assistant-util.js",
     "chrome/content/assistant-styles.js",
     "chrome/content/assistant-tool-dispatch.js",

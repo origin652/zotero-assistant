@@ -8,6 +8,7 @@ var ZoteroAssistantPluginCore = (() => {
     DEFAULT_AUDIT_MODEL,
     DEFAULT_API_MODE,
     DEFAULT_SAFETY_MODE,
+    DEFAULT_UI_LANGUAGE,
     DEFAULT_SELECTION_ASK_SHORTCUT,
     DEFAULT_SESSION_MEMORY_ENABLED,
     DEFAULT_AUTO_COMPRESSION_ENABLED,
@@ -153,6 +154,7 @@ var ZoteroAssistantPluginCore = (() => {
     this.setDefault(PREFS.apiMode, DEFAULT_API_MODE);
     this.setDefault(PREFS.apiKey, "");
     this.setDefault(PREFS.safetyMode, DEFAULT_SAFETY_MODE);
+    this.setDefault(PREFS.uiLanguage, DEFAULT_UI_LANGUAGE);
     this.setDefault(PREFS.debugMode, false);
     this.setDefault(PREFS.debugOutputDir, "");
     this.setDefault(PREFS.rememberedApprovals, "{}");
@@ -172,6 +174,30 @@ var ZoteroAssistantPluginCore = (() => {
   firstWindow() {
     const state = this.firstState();
     return state && state.win;
+  },
+
+  installPreferencePaneLocalization(state) {
+    if (!state || !state.win || !state.doc || state.prefPaneLocalizationObserver) {
+      return;
+    }
+    const schedule = () => {
+      if (state.prefPaneLocalizationTimer) {
+        return;
+      }
+      state.prefPaneLocalizationTimer = state.win.setTimeout(() => {
+        state.prefPaneLocalizationTimer = null;
+        this.localizePreferencePaneDocument(state.doc);
+      }, 0);
+    };
+    const Observer = state.win.MutationObserver;
+    if (typeof Observer === "function") {
+      state.prefPaneLocalizationObserver = new Observer(schedule);
+      state.prefPaneLocalizationObserver.observe(state.doc.documentElement || state.doc, {
+        childList: true,
+        subtree: true
+      });
+    }
+    schedule();
   },
 
   addToWindow(win) {
@@ -217,6 +243,8 @@ var ZoteroAssistantPluginCore = (() => {
       selectionAskShortcutTargets: [],
       selectionAskShortcutTimer: null,
       selectionAskShortcutSyncing: false,
+      prefPaneLocalizationObserver: null,
+      prefPaneLocalizationTimer: null,
       pendingSelectionAskDraft: null,
       activeSelectionAskDraftMeta: null,
       inputNode: null,
@@ -236,6 +264,7 @@ var ZoteroAssistantPluginCore = (() => {
     };
     win.addEventListener("resize", state.onResize);
     this.installSelectionAskShortcut(state);
+    this.installPreferencePaneLocalization(state);
     this.windows.set(win, state);
     this.render(state);
   },
@@ -387,6 +416,14 @@ var ZoteroAssistantPluginCore = (() => {
     if (state.logPopupTimer) {
       win.clearTimeout(state.logPopupTimer);
     }
+    if (state.prefPaneLocalizationTimer) {
+      win.clearTimeout(state.prefPaneLocalizationTimer);
+      state.prefPaneLocalizationTimer = null;
+    }
+    if (state.prefPaneLocalizationObserver) {
+      state.prefPaneLocalizationObserver.disconnect();
+      state.prefPaneLocalizationObserver = null;
+    }
     if (state.approvalPopup && typeof state.approvalPopup.hidePopup === "function") {
       state.approvalPopup.hidePopup();
     }
@@ -445,8 +482,8 @@ var ZoteroAssistantPluginCore = (() => {
     this.task.status = "paused";
     this.task.phase = stuckStarting ? "stuck_starting" : "orphan_running";
     this.task.error = stuckStarting
-      ? "上次任务卡在「启动」阶段（循环未真正开始）。已改为 paused，请重新发送或清除当前任务。"
-      : "上次任务循环已中断，但状态仍为 running。已自动修复为 paused，请重新发送或清除当前任务。";
+      ? this.t("orphanStuckStarting")
+      : this.t("orphanRunning");
     this.log("task.orphan_running_repaired", { id: this.task.id, phase: this.task.phase });
     return true;
   },

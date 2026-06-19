@@ -349,7 +349,7 @@ var ZoteroAssistantPluginChat = (() => {
       state.pendingSelectionAskDraft = null;
       this.log("selection.ask.no_selection", { reason: snapshot.error || "no_selection" });
       state.chatMinimized = false;
-      this.showChatNotice(state, "未检测到可提问的选中文本。你可以直接在这里输入问题。");
+      this.showChatNotice(state, this.t("noVisibleSelection"));
       return;
     }
     const draft = await this.buildSelectionAskDraft(state, snapshot);
@@ -464,14 +464,14 @@ var ZoteroAssistantPluginChat = (() => {
         return snapshot;
       }
     }
-    return { ok: false, error: "没有可读选区，或选区位于输入框、可编辑区域、Zotero 助手界面内。" };
+    return { ok: false, error: this.t("unreadableSelection") };
   },
 
   async describeSelectionAskSource(state, snapshot) {
     const fallback = {
       type: "zotero_window",
-      label: "Zotero 窗口选区",
-      lines: ["来源：Zotero 窗口选区"]
+      label: this.t("selectionLabel"),
+      lines: [this.t("sourceZoteroWindow")]
     };
     try {
       const tabID = this.selectedZoteroTabID(state.win);
@@ -492,9 +492,9 @@ var ZoteroAssistantPluginChat = (() => {
           const pageLabel = Number.isInteger(pageInfo.pageIndex) ? this.readerPageLabel(pdfApp, pageInfo.pageIndex) : "";
           const pageText = pageLabel || (pageInfo.pageNumber ? String(pageInfo.pageNumber) : "");
           const lines = [
-            `来源：Zotero 阅读器${title ? ` - ${title}` : ""}`,
-            attachment && attachment.key ? `附件 key：${attachment.key}` : "",
-            pageText ? `当前页：${pageText}` : ""
+            this.t("sourceZoteroReader", { title: title ? ` - ${title}` : "" }),
+            attachment && attachment.key ? this.t("attachmentKey", { key: attachment.key }) : "",
+            pageText ? this.t("currentPage", { page: pageText }) : ""
           ].filter(Boolean);
           return {
             type: "reader",
@@ -515,8 +515,8 @@ var ZoteroAssistantPluginChat = (() => {
     if (title) {
       return {
         type: "zotero_window",
-        label: `Zotero 窗口选区 - ${title}`,
-        lines: [`来源：Zotero 窗口选区 - ${title}`]
+        label: `${this.t("selectionLabel")} - ${title}`,
+        lines: [this.t("sourceZoteroWindowTitle", { title })]
       };
     }
     return fallback;
@@ -537,23 +537,23 @@ var ZoteroAssistantPluginChat = (() => {
     const truncated = clipped.length < original.length;
     const source = snapshot.source || {
       type: "zotero_window",
-      label: "Zotero 窗口选区",
-      lines: ["来源：Zotero 窗口选区"]
+      label: this.t("selectionLabel"),
+      lines: [this.t("sourceZoteroWindow")]
     };
     const lines = [
-      "基于这段文字回答：",
+      this.t("answerBasedOnText"),
       "",
       ...source.lines,
       "",
       this.quoteSelectionAskText(clipped),
       "",
-      "我的问题："
+      this.t("myQuestion")
     ];
     return {
       text: lines.join("\n"),
       meta: {
         sourceType: source.type || "zotero_window",
-        sourceLabel: source.label || "Zotero 窗口选区",
+        sourceLabel: source.label || this.t("selectionLabel"),
         libraryID: source.libraryID || "",
         libraryName: source.libraryName || "",
         itemKey: source.itemKey || "",
@@ -578,17 +578,17 @@ var ZoteroAssistantPluginChat = (() => {
     if (existing) {
       state.pendingSelectionAskDraft = draft;
       state.chatNotice = busy
-        ? "聊天输入框已有草稿，且当前任务正在运行。请选择如何处理草稿，任务结束后再发送。"
-        : "聊天输入框已有草稿，请选择追加、覆盖或取消。";
+        ? this.t("draftExistingBusy")
+        : this.t("draftExisting");
       this.renderChatPanel(state);
       return;
     }
     this.applySelectionAskDraftToInput(state, draft, "replace");
     const baseNotice = draft.meta.truncated
-      ? `已填入选中文本，原文 ${draft.meta.originalChars} 字符，已截断为 ${draft.meta.includedChars} 字符。`
-      : "已填入选中文本。请补充你的问题后发送。";
+      ? this.t("selectionFilledTruncated", { originalChars: draft.meta.originalChars, includedChars: draft.meta.includedChars })
+      : this.t("selectionFilled");
     state.chatNotice = busy
-      ? `${baseNotice} 当前任务正在运行，请等待结束后再发送。`
+      ? `${baseNotice} ${this.t("currentTaskRunningWait")}`
       : baseNotice;
     this.log("selection.ask.prepared", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: false }));
     this.renderChatPanel(state);
@@ -668,7 +668,13 @@ var ZoteroAssistantPluginChat = (() => {
     }
     const meta = state.activeSelectionAskDraftMeta;
     state.activeSelectionAskDraftMeta = null;
-    return String(text || "").includes("基于这段文字回答：") ? meta : null;
+    const content = String(text || "");
+    const markers = [
+      this.t("answerBasedOnText"),
+      "基于这段文字回答：",
+      "Answer based on this text:"
+    ];
+    return markers.some((marker) => marker && content.includes(marker)) ? meta : null;
   },
 
   clampChatBounds(state, bounds) {
@@ -741,7 +747,7 @@ var ZoteroAssistantPluginChat = (() => {
     const footer = this.el(doc, "div", "za-floating-chat-footer", "");
     footer.style.cssText = "flex:0 0 auto;display:flex;gap:8px;align-items:flex-end;padding:10px 12px 12px;border-top:1px solid #e2e5ea;background:#ffffff;";
     const input = this.html(doc, "textarea");
-    input.placeholder = "输入任务或回复 AI 追问。Shift+Enter 换行，Enter 发送。";
+    input.placeholder = this.t("chatPlaceholder");
     input.rows = 2;
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
@@ -754,8 +760,8 @@ var ZoteroAssistantPluginChat = (() => {
     footer.appendChild(send);
 
     const resizeHandle = this.el(doc, "div", "za-chat-resize-handle", "");
-    resizeHandle.setAttribute("aria-label", "拖动调节聊天窗大小");
-    resizeHandle.title = "拖动调节大小";
+    resizeHandle.setAttribute("aria-label", this.t("chatResizeLabel"));
+    resizeHandle.title = this.t("chatResizeTitle");
     panel.appendChild(header);
     panel.appendChild(messages);
     panel.appendChild(approval);
@@ -821,7 +827,7 @@ var ZoteroAssistantPluginChat = (() => {
     const grantDetails = this.html(doc, "details");
     grantDetails.className = "za-chat-drawer-grant";
     const grantSummary = this.html(doc, "summary");
-    grantSummary.textContent = "授权与会话";
+    grantSummary.textContent = this.uiText("授权与会话");
     grantDetails.appendChild(grantSummary);
     const grantBody = this.el(doc, "div", "za-chat-drawer-section-body", "");
     grantDetails.appendChild(grantBody);
@@ -942,13 +948,13 @@ var ZoteroAssistantPluginChat = (() => {
     const row = this.html(doc, "div");
     row.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;";
     row.appendChild(this.el(doc, "span", `za-pill ${this.statusPillClass(this.task.status)}`, this.task.status));
-    row.appendChild(this.el(doc, "span", "za-muted", `阶段 · ${this.task.phase}`));
+    row.appendChild(this.el(doc, "span", "za-muted", this.t("phase", { phase: this.task.phase })));
     body.appendChild(row);
     if (this.task.error) {
-      body.appendChild(this.el(doc, "div", "za-error", `错误：${this.task.error}`));
+      body.appendChild(this.el(doc, "div", "za-error", this.t("error", { error: this.task.error })));
     }
     if (this.task.libraryName) {
-      const lib = this.el(doc, "div", "za-muted", `绑定库：${this.task.libraryName}`);
+      const lib = this.el(doc, "div", "za-muted", this.t("boundLibrary", { library: this.task.libraryName }));
       lib.style.marginTop = "6px";
       body.appendChild(lib);
     }
@@ -1020,12 +1026,12 @@ var ZoteroAssistantPluginChat = (() => {
     const activeLibraryID = this.getActiveLibraryID(state.win);
     const activeLibraryName = this.getLibraryName(activeLibraryID);
     const activeGranted = this.hasSessionReadGrant(activeLibraryID);
-    body.appendChild(this.el(doc, "div", "", `界面库：${activeLibraryName}`));
+    body.appendChild(this.el(doc, "div", "", this.t("uiLibrary", { library: activeLibraryName })));
     const grantLine = this.el(
       doc,
       "div",
       activeGranted ? "za-grant-on" : "za-grant-off",
-      activeGranted ? "整库元数据读取 · 已开放" : "整库元数据读取 · 未开放"
+      activeGranted ? this.t("libraryReadOn") : this.t("libraryReadOff")
     );
     grantLine.style.marginTop = "6px";
     body.appendChild(grantLine);
@@ -1048,7 +1054,7 @@ var ZoteroAssistantPluginChat = (() => {
         emptyMemory.style.marginTop = "6px";
         body.appendChild(emptyMemory);
       } else {
-        const line = this.el(doc, "div", "za-grant-on", `已记录 · ${memory.summary.length} 字符 · 版本 ${memory.version || 1}`);
+        const line = this.el(doc, "div", "za-grant-on", this.t("memoryRecorded", { chars: memory.summary.length, version: memory.version || 1 }));
         line.style.marginTop = "6px";
         body.appendChild(line);
         const memActions = this.el(doc, "div", "za-btn-row", "");
@@ -1060,7 +1066,7 @@ var ZoteroAssistantPluginChat = (() => {
     }
 
     body.appendChild(this.el(doc, "div", "za-muted", "设置前缀授权")).style.marginTop = "10px";
-    const prefixes = Array.from(this.sessionPreferenceApprovals).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+    const prefixes = Array.from(this.sessionPreferenceApprovals).sort((a, b) => a.localeCompare(b, this.compareLocale()));
     if (!prefixes.length) {
       const emptyPrefs = this.el(doc, "div", "za-grant-off", "本会话暂无设置写入前缀授权");
       emptyPrefs.style.marginTop = "6px";
@@ -1124,8 +1130,8 @@ var ZoteroAssistantPluginChat = (() => {
     this.applyChatBounds(state);
     const minimizeButton = state.chatPanel.querySelector("[data-za-chat-minimize]");
     if (minimizeButton) {
-      minimizeButton.textContent = state.chatMinimized ? "恢复" : "最小化";
-      minimizeButton.setAttribute("aria-label", state.chatMinimized ? "恢复聊天窗" : "最小化聊天窗");
+      minimizeButton.textContent = state.chatMinimized ? this.uiText("恢复") : this.uiText("最小化");
+      minimizeButton.setAttribute("aria-label", state.chatMinimized ? this.uiText("恢复") : this.uiText("最小化"));
     }
     if (state.chatApprovalNode) {
       state.chatApprovalNode.style.setProperty("display", state.chatMinimized ? "none" : "block", "important");
@@ -1147,7 +1153,7 @@ var ZoteroAssistantPluginChat = (() => {
     }
     const transcript = this.buildChatTranscript();
     if (!transcript.length) {
-      body.appendChild(this.el(state.doc, "div", "za-chat-empty", "暂无问答。发送任务后，用户和 AI 的可读消息会显示在这里。"));
+      body.appendChild(this.el(state.doc, "div", "za-chat-empty", this.uiText("暂无问答。发送任务后，用户和 AI 的可读消息会显示在这里。")));
     } else {
       for (const entry of transcript) {
         body.appendChild(this.createChatBubbleRow(state.doc, entry));
@@ -1192,16 +1198,16 @@ var ZoteroAssistantPluginChat = (() => {
       return;
     }
     const clipped = raw.length > MAX_CHAT_DISPLAY_CHARS
-      ? raw.slice(0, MAX_CHAT_DISPLAY_CHARS) + "\n…（内容已截断）"
+      ? raw.slice(0, MAX_CHAT_DISPLAY_CHARS) + this.t("contentTruncated")
       : raw;
     const clippedReasoning = rawReasoning.length > MAX_CHAT_DISPLAY_CHARS
-      ? rawReasoning.slice(0, MAX_CHAT_DISPLAY_CHARS) + "\n…（思考过程已截断）"
+      ? rawReasoning.slice(0, MAX_CHAT_DISPLAY_CHARS) + this.t("reasoningTruncated")
       : rawReasoning;
     const isUser = speaker === "user";
     this.chatDisplayLog.push({
       speaker: isUser ? "user" : "ai",
       label: options.label || (isUser ? "你" : "AI"),
-      text: clipped || (clippedReasoning ? "（模型只返回了思考过程，没有返回正文。）" : ""),
+      text: clipped || (clippedReasoning ? this.t("reasoningOnly") : ""),
       reasoning: clippedReasoning,
       kind: options.kind || (isUser ? "user" : "ai"),
       time: Date.now()
@@ -1231,7 +1237,7 @@ var ZoteroAssistantPluginChat = (() => {
     button.id = "zotero-assistant-chat-launcher";
     button.type = "button";
     button.textContent = "AI";
-    button.setAttribute("aria-label", "打开 Zotero 助手聊天窗");
+    button.setAttribute("aria-label", this.uiText("打开 Zotero 助手聊天窗"));
     button.style.pointerEvents = "auto";
     button.addEventListener("click", () => this.showChatPanel(state));
     this.ensureUiOverlayRoot(state).appendChild(button);
@@ -1265,18 +1271,18 @@ var ZoteroAssistantPluginChat = (() => {
     }
     const phase = this.task.phase || "";
     if (phase === "compressing_context") {
-      return "正在压缩上下文…";
+      return this.uiText("正在压缩上下文…");
     }
     if (phase === "injecting_context") {
-      return "正在读取 Zotero 上下文…";
+      return this.uiText("正在读取 Zotero 上下文…");
     }
     if (phase === "understanding" || phase === "continued" || phase === "resumed") {
-      return "正在思考…";
+      return this.uiText("正在思考…");
     }
     if (phase === "calling_model") {
-      return "正在等待模型回复…";
+      return this.uiText("正在等待模型回复…");
     }
-    return "正在处理…";
+    return this.uiText("正在处理…");
   },
 
   createChatTypingRow(doc) {
@@ -1312,7 +1318,7 @@ var ZoteroAssistantPluginChat = (() => {
     row.style.cssText = isUser
       ? "display:flex;flex-direction:row;align-items:flex-start;justify-content:flex-end;gap:8px;width:100%;box-sizing:border-box;"
       : "display:flex;flex-direction:row;align-items:flex-start;justify-content:flex-start;gap:8px;width:100%;box-sizing:border-box;";
-    const avatar = this.el(doc, "div", isUser ? "za-chat-avatar za-chat-avatar-user" : "za-chat-avatar za-chat-avatar-ai", isUser ? "我" : "AI");
+    const avatar = this.el(doc, "div", isUser ? "za-chat-avatar za-chat-avatar-user" : "za-chat-avatar za-chat-avatar-ai", isUser ? this.uiText("我") : "AI");
     avatar.style.cssText = isUser
       ? "flex:0 0 36px;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;background:#c45c26;color:#fff;"
       : "flex:0 0 36px;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;background:#4a90d9;color:#fff;";
@@ -1321,7 +1327,7 @@ var ZoteroAssistantPluginChat = (() => {
       ? "display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0;max-width:calc(100% - 52px);"
       : "display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0;max-width:calc(100% - 52px);";
     const isProcess = entry.kind === "process";
-    const name = this.el(doc, "div", "za-chat-name", entry.label || (isUser ? "你" : "AI"));
+    const name = this.el(doc, "div", "za-chat-name", entry.label || (isUser ? this.uiText("你") : "AI"));
     name.style.cssText = "font-size:11px;font-weight:600;color:#8a8f99;line-height:1.2;padding:0 4px;";
     const bubble = this.el(doc, "div", isUser ? "za-chat-bubble za-chat-bubble-user" : (isProcess ? "za-chat-bubble za-chat-bubble-process" : "za-chat-bubble za-chat-bubble-ai"), "");
     bubble.style.cssText = isUser
@@ -1449,7 +1455,7 @@ var ZoteroAssistantPluginChat = (() => {
     if (process.length) {
       const summary = this.compressProcessLinesForChat(process);
       if (summary) {
-        this.appendChatDisplay("ai", summary, { label: "工作记录", kind: "process" });
+        this.appendChatDisplay("ai", summary, { label: this.uiText("工作记录"), kind: "process" });
       }
     }
     this.resetChatTurnPending();
@@ -1467,7 +1473,7 @@ var ZoteroAssistantPluginChat = (() => {
     }
     const pending = this.task.pendingApproval;
     const card = this.el(state.doc, "div", "za-chat-approval-card", "");
-    const title = this.el(state.doc, "div", "", pending.kind === "session_library_read" ? "AI 需要整库读取权限" : "AI 需要你批准一个操作");
+    const title = this.el(state.doc, "div", "", pending.kind === "session_library_read" ? this.uiText("AI 需要整库读取权限") : this.uiText("AI 需要你批准一个操作"));
     title.style.fontWeight = "800";
     title.style.marginBottom = "6px";
     const summary = this.el(state.doc, "div", "", pending.summary);
@@ -1486,7 +1492,7 @@ var ZoteroAssistantPluginChat = (() => {
       tag.style.marginBottom = "4px";
       card.appendChild(tag);
       if (pending.aiReason) {
-        const reason = this.el(state.doc, "div", "za-muted", `理由：${pending.aiReason}`);
+        const reason = this.el(state.doc, "div", "za-muted", this.t("reason", { reason: pending.aiReason }));
         reason.style.whiteSpace = "pre-wrap";
         reason.style.marginBottom = "6px";
         card.appendChild(reason);
@@ -1497,7 +1503,7 @@ var ZoteroAssistantPluginChat = (() => {
       const details = this.html(state.doc, "details");
       details.style.marginTop = "6px";
       const detailsSummary = this.html(state.doc, "summary");
-      detailsSummary.textContent = "查看详情";
+      detailsSummary.textContent = this.uiText("查看详情");
       const pre = this.html(state.doc, "pre");
       pre.textContent = pending.details;
       pre.style.cssText = "white-space:pre-wrap;word-break:break-all;font-size:11px;margin:6px 0 0;max-height:180px;overflow:auto;";
@@ -1526,22 +1532,22 @@ var ZoteroAssistantPluginChat = (() => {
     buttons.appendChild(this.actionButton(state.doc, "追加", "primary", () => {
       this.applySelectionAskDraftToInput(state, draft, "append");
       state.chatNotice = draft.meta.truncated
-        ? `已追加选中文本，原文 ${draft.meta.originalChars} 字符，已截断为 ${draft.meta.includedChars} 字符。`
-        : "已追加选中文本。";
+        ? this.t("selectionAppendedTruncated", { originalChars: draft.meta.originalChars, includedChars: draft.meta.includedChars })
+        : this.t("selectionAppended");
       this.log("selection.ask.prepared", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: true, mergeMode: "append" }));
       this.renderChatPanel(state);
     }));
     buttons.appendChild(this.actionButton(state.doc, "覆盖", "secondary", () => {
       this.applySelectionAskDraftToInput(state, draft, "replace");
       state.chatNotice = draft.meta.truncated
-        ? `已覆盖为选中文本，原文 ${draft.meta.originalChars} 字符，已截断为 ${draft.meta.includedChars} 字符。`
-        : "已覆盖为选中文本。";
+        ? this.t("selectionReplacedTruncated", { originalChars: draft.meta.originalChars, includedChars: draft.meta.includedChars })
+        : this.t("selectionReplaced");
       this.log("selection.ask.prepared", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: true, mergeMode: "replace" }));
       this.renderChatPanel(state);
     }));
     buttons.appendChild(this.actionButton(state.doc, "取消", "ghost", () => {
       state.pendingSelectionAskDraft = null;
-      state.chatNotice = "已取消这次选句提问草稿。";
+      state.chatNotice = this.t("selectionDraftCancelled");
       this.log("selection.ask.cancelled", this.selectionAskLogPayload(draft.meta, { hadExistingDraft: true }));
       this.renderChatPanel(state);
     }));
@@ -1637,7 +1643,7 @@ var ZoteroAssistantPluginChat = (() => {
       this.log("task.loop.skipped_reentrant", { id: this.task.id });
       this.task.status = "paused";
       this.task.phase = "loop_busy";
-      this.task.error = "任务循环未结束，无法再次启动。请稍候，或点聊天 header 的「管理」→「清除任务」。";
+      this.task.error = this.t("loopBusy");
       this.showChatNotice(state, this.task.error);
       this.renderAll();
       return;
@@ -1655,7 +1661,7 @@ var ZoteroAssistantPluginChat = (() => {
           this.task.phase = "model_failed";
           this.task.error = String(error);
         }
-        this.showChatNotice(state, `任务异常：${error}`);
+        this.showChatNotice(state, this.t("taskException", { error }));
       })
       .finally(() => {
         this.taskLoopActive = false;
@@ -1670,17 +1676,17 @@ var ZoteroAssistantPluginChat = (() => {
     const taskText = String(text || "").trim();
     const selectionAskMeta = options.selectionAskMeta || null;
     if (!taskText) {
-      this.showChatNotice(state, "请输入一个明确任务。助手不会默认执行任何任务。");
+      this.showChatNotice(state, this.t("noInputTask"));
       return false;
     }
     if (!state || !state.win) {
-      this.showChatNotice(state, "无法绑定 Zotero 主窗口，请关闭聊天窗后从本窗口重新打开。");
+      this.showChatNotice(state, this.t("cannotBindWindow"));
       return false;
     }
     this.repairOrphanRunningTask();
     if (this.task && this.task.status === "running") {
       this.appendChatDisplay("user", taskText);
-      this.showChatNotice(state, "已有任务正在运行，这条已记在聊天里。请等待当前任务结束，或点「管理」→「清除任务」后再发新任务。");
+      this.showChatNotice(state, this.t("taskAlreadyRunning"));
       this.scheduleChatRepaint(state);
       return false;
     }
@@ -1696,7 +1702,7 @@ var ZoteroAssistantPluginChat = (() => {
       libraryName = taskLibrary.libraryName;
       libraryBindingSource = taskLibrary.source;
     } catch (error) {
-      this.showChatNotice(state, `无法读取当前文献库：${error}`);
+      this.showChatNotice(state, this.t("cannotReadLibrary", { error }));
       return false;
     }
     this.taskLoopActive = false;
@@ -1751,7 +1757,7 @@ var ZoteroAssistantPluginChat = (() => {
     } catch (error) {
       this.task.status = "paused";
       this.task.phase = "start_failed";
-      this.task.error = `聊天显示初始化失败：${error}`;
+      this.task.error = this.t("chatInitFailed", { error });
       this.showChatNotice(state, this.task.error);
       this.renderAll();
       return false;
@@ -1763,7 +1769,7 @@ var ZoteroAssistantPluginChat = (() => {
     } catch (error) {
       this.task.status = "paused";
       this.task.phase = "loop_start_failed";
-      this.task.error = `任务循环启动失败：${error}`;
+      this.task.error = this.t("taskLoopStartFailed", { error });
       this.log("task.paused", {
         id: this.task.id,
         reason: this.task.error,
@@ -1900,7 +1906,7 @@ var ZoteroAssistantPluginChat = (() => {
     if (name === "request_clarification") {
       return [
         args.question || "",
-        args.recommendedAnswer ? `推荐：${args.recommendedAnswer}` : ""
+        args.recommendedAnswer ? this.t("recommendedAnswer", { answer: args.recommendedAnswer }) : ""
       ].filter(Boolean).join("\n");
     }
     return "";
@@ -1913,8 +1919,8 @@ var ZoteroAssistantPluginChat = (() => {
     }
     const maxLines = 10;
     const head = items.slice(0, maxLines);
-    const tail = items.length > maxLines ? `\n… 另有 ${items.length - maxLines} 步未展开` : "";
-    return ["【本回合后台操作】", ...head.map((line, index) => `${index + 1}. ${line}`)].join("\n") + tail;
+    const tail = items.length > maxLines ? `\n${this.t("processMore", { count: items.length - maxLines })}` : "";
+    return [this.t("processHeading"), ...head.map((line, index) => `${index + 1}. ${line}`)].join("\n") + tail;
   },
 
   chatProcessLineFromToolCall(call) {
@@ -1954,16 +1960,17 @@ var ZoteroAssistantPluginChat = (() => {
       open_zotero_preferences: "打开设置页",
       create_parent_item: "创建父条目"
     };
-    const label = labels[name] || name;
+    const label = this.uiText(labels[name] || name);
     let detail = "";
+    const separator = this.isEnglishUI() ? ": " : "：";
     if (name === "search_items" && args.query) {
-      detail = `：${args.query}`;
+      detail = `${separator}${args.query}`;
     } else if (name === "live_search" && args.query) {
-      detail = `：${args.query}`;
+      detail = `${separator}${args.query}`;
     } else if (name === "web_fetch" && args.url) {
-      detail = `：${String(args.url).slice(0, 60)}`;
+      detail = `${separator}${String(args.url).slice(0, 60)}`;
     } else if (name === "create_collection" && args.name) {
-      detail = `：${args.name}`;
+      detail = `${separator}${args.name}`;
     }
     return `${label}${detail}`;
   },
@@ -1981,7 +1988,7 @@ var ZoteroAssistantPluginChat = (() => {
       entries.push({
         speaker: "ai",
         label: "AI",
-        text: readable.map((entry) => entry.text).filter(Boolean).join("\n\n") || "（模型只返回了思考过程，没有返回正文。）",
+        text: readable.map((entry) => entry.text).filter(Boolean).join("\n\n") || this.t("reasoningOnly"),
         reasoning: readable.map((entry) => entry.reasoning).filter(Boolean).join("\n\n"),
         kind: "ai"
       });
@@ -1992,7 +1999,7 @@ var ZoteroAssistantPluginChat = (() => {
       if (summary) {
         entries.push({
           speaker: "ai",
-          label: "工作记录",
+          label: this.uiText("工作记录"),
           text: summary,
           kind: "process"
         });
@@ -2030,14 +2037,14 @@ var ZoteroAssistantPluginChat = (() => {
     if (!summary || summary.length < 8) {
       return {
         ok: false,
-        error: "finish_task 被拒绝：必须填写给用户的中文 summary（至少 8 个字），说明做了什么、结果如何。"
+        error: this.t("finalSummaryRequired")
       };
     }
     const prior = this.task ? (this.task.userFacingMessageCount || 0) : 0;
     if (prior < 1 && summary.length < 24) {
       return {
         ok: false,
-        error: "finish_task 被拒绝：本任务尚未向用户发送过任何说明。请先在同一轮用中文回复用户（assistant 正文或 request_clarification），或在 finish_task.summary 中写完整说明（不少于 24 字），再结束任务。",
+        error: this.t("finalSummaryNoPriorMessage"),
         mustMessageUserFirst: true
       };
     }
@@ -2065,13 +2072,20 @@ var ZoteroAssistantPluginChat = (() => {
       "结果如下",
       "概览如下",
       "内容如下",
-      "列表如下"
+      "列表如下",
+      "asfollows",
+      "summaryasfollows",
+      "resultasfollows",
+      "resultsasfollows",
+      "below",
+      "summarybelow",
+      "resultsbelow"
     ];
     if (placeholderEndings.some((ending) => compact.endsWith(ending))) {
-      return "finish_task 被拒绝：summary 不能只写“如下”式引导语，必须直接包含实际结论、结果或下一步。";
+      return this.t("finalSummaryPlaceholder");
     }
     if (/[:：]\s*$/.test(summary)) {
-      return "finish_task 被拒绝：summary 不能停在冒号后，必须直接包含实际结论、结果或下一步。";
+      return this.t("finalSummaryColon");
     }
     return "";
   },

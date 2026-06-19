@@ -165,7 +165,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     body.textContent = "";
     if (!this.task) {
       const empty = this.el(state.doc, "p", "za-empty", "");
-      empty.textContent = "打开聊天窗并输入明确任务后开始。助手不会默认整理书架或执行任何操作。";
+      empty.textContent = this.uiText("打开聊天窗并输入明确任务后开始。助手不会默认整理书架或执行任何操作。");
       body.appendChild(empty);
       return;
     }
@@ -173,15 +173,15 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     row.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;";
     const pill = this.el(state.doc, "span", `za-pill ${this.statusPillClass(this.task.status)}`, this.task.status);
     row.appendChild(pill);
-    const phase = this.el(state.doc, "span", "za-muted", `阶段 · ${this.task.phase}`);
+    const phase = this.el(state.doc, "span", "za-muted", this.t("phase", { phase: this.task.phase }));
     row.appendChild(phase);
     body.appendChild(row);
     if (this.task.error) {
-      const error = this.el(state.doc, "div", "za-error", `错误：${this.task.error}`);
+      const error = this.el(state.doc, "div", "za-error", this.t("error", { error: this.task.error }));
       body.appendChild(error);
     }
     if (this.task.lastDebugReportPath) {
-      const debugPath = this.el(state.doc, "div", "za-muted", `调试文件：${this.task.lastDebugReportPath}`);
+      const debugPath = this.el(state.doc, "div", "za-muted", this.t("debugFile", { path: this.task.lastDebugReportPath }));
       debugPath.style.marginTop = "8px";
       debugPath.style.wordBreak = "break-all";
       body.appendChild(debugPath);
@@ -194,7 +194,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       body.appendChild(summary);
     }
     if (this.task.libraryName) {
-      const library = this.el(state.doc, "div", "za-muted", `绑定库：${this.task.libraryName}`);
+      const library = this.el(state.doc, "div", "za-muted", this.t("boundLibrary", { library: this.task.libraryName }));
       library.style.marginTop = "8px";
       body.appendChild(library);
     }
@@ -222,6 +222,103 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   formatLogEvent(event) {
     const data = event.data || {};
     const time = new Date(event.time).toLocaleTimeString();
+    if (this.isEnglishUI()) {
+      switch (event.type) {
+        case "task.started":
+          return { tone: "info", badge: "Task", title: "Started new task", detail: this.truncateText(data.prompt || "", 220), meta: time };
+        case "task.user_reply":
+          return { tone: "info", badge: "Continue", title: "User added task information", detail: this.truncateText(data.content || "", 220), meta: time };
+        case "task.context.injected":
+          return {
+            tone: "neutral",
+            badge: "Context",
+            title: "Injected context for this turn",
+            detail: [
+              data.sessionMetadataAccess ? "Includes full-library overview." : "Includes current selection and current collection only.",
+              data.sessionMemoryChars ? `Session memory ${data.sessionMemoryChars} chars.` : ""
+            ].filter(Boolean).join(" "),
+            meta: time
+          };
+        case "task.context.compressed":
+          return { tone: "warning", badge: "Compression", title: "Automatically compressed task context", detail: `Covered ${data.coveredMessages || 0} messages, summary ${data.summaryChars || 0} chars.`, meta: time };
+        case "task.context.trimmed_after_compression_failure":
+          return { tone: "warning", badge: "Compression", title: "Trimmed old context after compression failed", detail: `${data.beforeMessages || 0} messages became ${data.afterMessages || 0}.`, meta: time };
+        case "task.loop.starting":
+          return { tone: "info", badge: "Loop", title: "Preparing to start task loop", detail: this.truncateText(data.phase || "", 120), meta: time };
+        case "task.loop.entered":
+          return { tone: "info", badge: "Loop", title: "Task loop entered", detail: this.truncateText(data.phase || "", 120), meta: time };
+        case "model.request.started":
+          return { tone: "info", badge: "Model", title: "Model request sent", detail: `${data.variant || ""} · ${data.model || ""}`.trim(), meta: time };
+        case "model.response.headers":
+          return { tone: data.ok ? "info" : "warning", badge: "Model", title: "Received model response headers", detail: `HTTP ${data.status || ""} ${data.contentType || ""}`.trim(), meta: time };
+        case "model.response.body_read":
+          return { tone: "success", badge: "Model", title: "Read model response body", detail: `${data.rawTextLength || 0} chars`, meta: time };
+        case "reader.pages.read":
+          return { tone: "success", badge: "Reader", title: "Read current reader pages", detail: `Current page ${data.currentPage || "?"}, returned ${data.pageCount || 0} pages.`, meta: time };
+        case "model.retry":
+          return { tone: "warning", badge: "Retry", title: `Model call retry ${Number(data.attempt || 0) + 1}`, detail: this.truncateText(data.error || "", 220), meta: time };
+        case "model.variant_fallback":
+          return { tone: "warning", badge: "Compatibility", title: "Switched to compatibility response mode", detail: this.truncateText(data.variant || "", 160), meta: time };
+        case "model.unrecognized_response":
+          return { tone: "danger", badge: "Model", title: "Model returned unrecognized format", detail: this.truncateText(`${data.variant || ""} ${data.preview || ""}`.trim(), 240), meta: time };
+        case "approval.requested":
+          return { tone: "warning", badge: "Approval", title: "AI requested approval", detail: this.truncateText(data.summary || "", 220), meta: time };
+        case "approval.rejected":
+          return { tone: "danger", badge: "Approval", title: "Approval rejected", detail: this.truncateText(data.summary || data.toolName || "", 220), meta: time };
+        case "approval.granted":
+          return { tone: "success", badge: "Approval", title: "Approval granted", detail: this.truncateText(data.summary || data.toolName || "", 220), meta: time };
+        case "tool.started":
+          return { tone: "info", badge: "Tool", title: `Started ${data.toolName || "tool"}`, detail: this.summarizeToolArgs(data.toolName, data.args), meta: time };
+        case "tool.finished":
+          return { tone: data.result && data.result.ok === false ? "danger" : "success", badge: data.result && data.result.ok === false ? "Failed" : "Done", title: `${data.toolName || "Tool"} returned`, detail: this.summarizeToolResult(data.result), meta: time };
+        case "tool.retry_requested":
+          return { tone: "warning", badge: "Adjust", title: "Tool failed; model asked to adjust", detail: this.truncateText(data.error || "", 220), meta: time };
+        case "assistant.message":
+          return { tone: data.needsUserReply ? "info" : "neutral", badge: "AI", title: data.needsUserReply ? "AI needs more information" : "AI returned a message", detail: this.truncateText(data.text || "", 240), meta: time };
+        case "task.paused":
+          return { tone: "danger", badge: "Paused", title: "Task paused", detail: this.truncateText(data.reason || "", 240), meta: time };
+        case "library.read_grant.granted":
+          return { tone: "success", badge: "Access", title: "Full-library metadata read granted", detail: this.truncateText(data.libraryName || "", 180), meta: time };
+        case "library.read_grant.revoked":
+          return { tone: "warning", badge: "Access", title: "Full-library metadata read revoked", detail: this.truncateText(data.libraryName || "", 180), meta: time };
+        case "undo.started":
+          return { tone: "info", badge: "Undo", title: "Started undoing recent action", detail: this.truncateText(data.type || "", 180), meta: time };
+        case "undo.finished":
+          return { tone: "success", badge: "Undo", title: "Undo completed", detail: this.truncateText(data.type || "", 180), meta: time };
+        case "task.context.cleared":
+          return { tone: "warning", badge: "Context", title: "Cleared current task", detail: this.truncateText(data.libraryName || "", 180), meta: time };
+        case "session_memory.updated":
+          return { tone: "success", badge: "Memory", title: "Updated session memory for this library", detail: `Summary ${data.summaryChars || 0} chars, version ${data.version || 0}.`, meta: time };
+        case "session_memory.update_failed":
+          return { tone: "warning", badge: "Memory", title: "Session memory update failed", detail: this.truncateText(data.error || "", 220), meta: time };
+        case "session_memory.cleared":
+          return { tone: "warning", badge: "Memory", title: "Cleared session memory for this library", detail: this.truncateText(data.libraryName || "", 180), meta: time };
+        case "session_memory.copied":
+          return { tone: "success", badge: "Memory", title: "Copied session memory for this library", detail: `${data.summaryChars || 0} chars.`, meta: time };
+        case "session_memory.copy_failed":
+          return { tone: "warning", badge: "Memory", title: "Copying session memory failed", detail: this.truncateText(data.error || "", 220), meta: time };
+        case "preference.changed":
+          return { tone: "warning", badge: "Settings", title: "Preference changed", detail: this.truncateText(data.name || "", 220), meta: time };
+        case "preference.prefix_granted":
+          return { tone: "success", badge: "Settings", title: "Remembered preference prefix", detail: this.truncateText(data.prefix || "", 220), meta: time };
+        case "preference.prefix_revoked":
+          return { tone: "warning", badge: "Settings", title: "Revoked preference prefix", detail: this.truncateText(data.prefix || "", 220), meta: time };
+        case "debug.report_written":
+          return { tone: "success", badge: "Debug", title: "Wrote debug file", detail: this.truncateText(data.path || "", 240), meta: time };
+        case "debug.report_failed":
+          return { tone: "warning", badge: "Debug", title: "Writing debug file failed", detail: this.truncateText(data.error || data.path || "", 240), meta: time };
+        case "plugin.started":
+          return { tone: "neutral", badge: "Plugin", title: "Plugin started", detail: `Version ${data.version || ""}`.trim(), meta: time };
+        case "ai_review": {
+          const levelLabel = data.level === "low" ? "low risk" : data.level === "mid" ? "medium risk" : "high risk";
+          const tone = data.level === "low" ? "success" : data.level === "mid" ? "warning" : "danger";
+          const title = `AI review ${data.toolName || ""}: ${levelLabel}${data.ok === false ? " (review failed)" : ""}`;
+          return { tone, badge: "Review", title, detail: this.truncateText(data.reason || "", 220), meta: time };
+        }
+        default:
+          return { tone: "neutral", badge: "Event", title: event.type, detail: this.truncateText(JSON.stringify(data), 220), meta: time };
+      }
+    }
     switch (event.type) {
       case "task.started":
         return { tone: "info", badge: "任务", title: "开始新任务", detail: this.truncateText(data.prompt || "", 220), meta: time };
@@ -443,7 +540,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       tag.style.marginBottom = "4px";
       body.appendChild(tag);
       if (pending.aiReason) {
-        const reason = this.el(state.doc, "p", "za-muted", `理由：${pending.aiReason}`);
+        const reason = this.el(state.doc, "p", "za-muted", this.t("reason", { reason: pending.aiReason }));
         reason.style.marginBottom = "6px";
         reason.style.lineHeight = "1.5";
         body.appendChild(reason);
@@ -454,7 +551,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     body.appendChild(summary);
     const details = this.html(state.doc, "details");
     const detailsSummary = this.html(state.doc, "summary");
-    detailsSummary.textContent = "查看详情";
+    detailsSummary.textContent = this.uiText("查看详情");
     const pre = this.html(state.doc, "pre");
     pre.textContent = pending.details;
     details.appendChild(detailsSummary);
@@ -472,6 +569,19 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   },
 
   approvalSummary(toolName, args) {
+    const unknown = this.isEnglishUI() ? "not specified" : "未说明";
+    if (this.isEnglishUI()) {
+      const summaries = {
+        request_expanded_context: `AI requests session access to full-library metadata for "${this.getLibraryName(this.currentTaskLibraryID())}". Reason: ${args.reason || unknown}`,
+        create_parent_item: `AI requests creating a ${args.itemType || ""} parent item for attachment ${args.attachmentKey || ""}, then moving the attachment under it.`,
+        update_metadata: `AI requests modifying metadata${Array.isArray(args.creators) ? " and creators" : ""} for item ${args.itemKey || ""}.`,
+        set_preference: `AI requests changing preference ${args.name || ""}. Reason: ${args.reason || unknown}`,
+        request_zotero_restart: `AI requests restarting Zotero. Reason: ${args.reason || unknown}`,
+        move_to_trash: `AI requests moving ${args.itemKeys ? args.itemKeys.length : 0} items to trash. Reason: ${args.reason || unknown}`,
+        trigger_plugin_command: `AI requests running another plugin command: ${args.commandId || ""}. ${args.summary || ""}`
+      };
+      return summaries[toolName] || `AI requests executing ${toolName}.`;
+    }
     const summaries = {
       request_expanded_context: `AI 请求开放“${this.getLibraryName(this.currentTaskLibraryID())}”在本会话中的整库元数据读取。原因：${args.reason || "未说明"}`,
       create_parent_item: `AI 请求为附件 ${args.attachmentKey || ""} 创建一个 ${args.itemType || ""} 父条目，并将该附件挂到新父条目下。`,
@@ -496,12 +606,12 @@ var ZoteroAssistantPluginApprovalUi = (() => {
 
   aiRiskTagText(level) {
     if (level === "low") {
-      return "【AI：低风险】";
+      return this.uiText("【AI：低风险】");
     }
     if (level === "mid") {
-      return "【AI：中等风险】";
+      return this.uiText("【AI：中等风险】");
     }
-    return "【AI：高风险】";
+    return this.uiText("【AI：高风险】");
   },
 
   renderGrantState(state) {
@@ -513,17 +623,17 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     const activeLibraryID = this.getActiveLibraryID(state.win);
     const activeLibraryName = this.getLibraryName(activeLibraryID);
     const activeGranted = this.hasSessionReadGrant(activeLibraryID);
-    body.appendChild(this.el(state.doc, "div", "", `界面库：${activeLibraryName}`));
+    body.appendChild(this.el(state.doc, "div", "", this.t("uiLibrary", { library: activeLibraryName })));
     const grantLine = this.el(
       state.doc,
       "div",
       activeGranted ? "za-grant-on" : "za-grant-off",
-      activeGranted ? "整库元数据读取 · 已开放" : "整库元数据读取 · 未开放"
+      activeGranted ? this.t("libraryReadOn") : this.t("libraryReadOff")
     );
     grantLine.style.marginTop = "6px";
     body.appendChild(grantLine);
     if (this.task && this.task.libraryID && this.task.libraryID !== activeLibraryID) {
-      const taskLine = this.el(state.doc, "div", "za-muted", `任务绑定库：${this.task.libraryName}`);
+      const taskLine = this.el(state.doc, "div", "za-muted", this.t("boundLibrary", { library: this.task.libraryName }));
       taskLine.style.marginTop = "6px";
       body.appendChild(taskLine);
     }
@@ -547,12 +657,12 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         emptyMemory.style.marginTop = "6px";
         body.appendChild(emptyMemory);
       } else {
-        const line = this.el(state.doc, "div", "za-grant-on", `已记录 · ${memory.summary.length} 字符 · 版本 ${memory.version || 1}`);
+        const line = this.el(state.doc, "div", "za-grant-on", this.t("memoryRecorded", { chars: memory.summary.length, version: memory.version || 1 }));
         line.style.marginTop = "6px";
         body.appendChild(line);
         const details = this.html(state.doc, "details");
         const detailsSummary = this.html(state.doc, "summary");
-        detailsSummary.textContent = "查看会话摘要";
+        detailsSummary.textContent = this.uiText("查看会话摘要");
         const pre = this.html(state.doc, "pre");
         pre.textContent = memory.summary;
         pre.style.whiteSpace = "pre-wrap";
@@ -569,7 +679,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     const prefTitle = this.el(state.doc, "div", "za-muted", "设置前缀授权");
     prefTitle.style.marginTop = "10px";
     body.appendChild(prefTitle);
-    const prefixes = Array.from(this.sessionPreferenceApprovals).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+    const prefixes = Array.from(this.sessionPreferenceApprovals).sort((a, b) => a.localeCompare(b, this.compareLocale()));
     if (!prefixes.length) {
       const emptyPrefs = this.el(state.doc, "div", "za-grant-off", "本会话暂无设置写入前缀授权");
       emptyPrefs.style.marginTop = "6px";
@@ -639,6 +749,58 @@ var ZoteroAssistantPluginApprovalUi = (() => {
 
   summarizeToolArgs(toolName, args) {
     const safeArgs = args || {};
+    if (this.isEnglishUI()) {
+      switch (toolName) {
+        case "request_expanded_context":
+          return this.truncateText(safeArgs.reason || "Needs full-library context.", 140);
+        case "create_collection":
+          return `Create collection: ${safeArgs.name || "Untitled"}${safeArgs.parentKey ? `; parent key: ${safeArgs.parentKey}` : ""}`;
+        case "add_items_to_collection":
+          return `Add ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} items to ${safeArgs.collectionKey || safeArgs.collectionName || "target collection"}`;
+        case "add_tags":
+          return `Tags: ${Array.isArray(safeArgs.tags) ? safeArgs.tags.join(", ") : ""}`;
+        case "create_note":
+        case "append_note":
+          return `Target item: ${safeArgs.parentItemKey || safeArgs.itemKey || "not specified"}`;
+        case "create_parent_item":
+          return `Create ${safeArgs.itemType || "parent item"} for attachment ${safeArgs.attachmentKey || ""}`;
+        case "update_metadata":
+          return `Update metadata for item ${safeArgs.itemKey || ""}`;
+        case "set_preference":
+          return `Change preference ${safeArgs.name || ""}`;
+        case "browse_preferences":
+          return `Browse preference prefix: ${safeArgs.prefix || "root"}`;
+        case "search_preferences":
+          return `Search preferences: ${safeArgs.query || ""}`;
+        case "read_preferences":
+          return `Read preferences: ${Array.isArray(safeArgs.names) ? safeArgs.names.join(", ") : (safeArgs.prefix || "root")}`;
+        case "read_current_reader_pages":
+          return "Read current reader page and nearby pages";
+        case "list_preference_panes":
+          return "List preference panes";
+        case "open_zotero_preferences":
+          return args.pane_id ? `Open preference pane: ${args.pane_id}` : "Open Zotero preferences";
+        case "request_zotero_restart":
+          return `Request Zotero restart: ${safeArgs.reason || ""}`;
+        case "move_to_trash":
+          return `Move to trash: ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} items`;
+        case "trigger_plugin_command":
+          return `Run command: ${safeArgs.commandId || ""}`;
+        case "read_fulltext_page":
+        case "read_fulltext":
+          return `Full-text page: ${safeArgs.itemKey || ""}`;
+        case "read_item_fields":
+          return `Read right-pane fields: ${safeArgs.itemKey || ""}`;
+        case "live_search":
+          return this.truncateText(safeArgs.query || "", 160);
+        case "web_fetch":
+          return this.truncateText(`${safeArgs.url || ""} - ${safeArgs.prompt || ""}`, 200);
+        case "finish_task":
+          return this.truncateText(safeArgs.summary || "End task.", 160);
+        default:
+          return this.truncateText(JSON.stringify(safeArgs), 160);
+      }
+    }
     switch (toolName) {
       case "request_expanded_context":
         return this.truncateText(safeArgs.reason || "需要整库视角。", 140);
@@ -773,7 +935,9 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       content: JSON.stringify({
         ok: false,
         rejected: true,
-        error: `用户拒绝了这次 ${pending.toolName} 调用。请不要重复请求同一个操作,改用其它方案、缩小范围,或向用户说明为什么需要这个操作。`,
+        error: this.isEnglishUI()
+          ? `The user rejected this ${pending.toolName} call. Do not repeat the same request; choose another approach, narrow the scope, or explain why the operation is needed.`
+          : `用户拒绝了这次 ${pending.toolName} 调用。请不要重复请求同一个操作,改用其它方案、缩小范围,或向用户说明为什么需要这个操作。`,
         toolName: pending.toolName
       })
     });
@@ -788,6 +952,76 @@ var ZoteroAssistantPluginApprovalUi = (() => {
   },
 
   summarizeToolResult(result) {
+    if (this.isEnglishUI()) {
+      if (!result) {
+        return "No result returned.";
+      }
+      if (result.ok === false) {
+        return this.truncateText(result.error || "Tool failed.", 220);
+      }
+      if (result.waitingForUser) {
+        return "Paused, waiting for your input.";
+      }
+      if (result.collection) {
+        return `Created collection: ${result.collection.name || result.collection.key || ""}`;
+      }
+      if (result.parentItem) {
+        return `Created ${result.parentItem.itemType || "parent item"}: ${result.parentItem.title || result.parentItem.key || ""}`;
+      }
+      if (typeof result.addedCount === "number") {
+        return `Added ${result.addedCount} items.`;
+      }
+      if (result.item && result.metadata) {
+        return `Read right-pane metadata fields for ${result.item.title || result.item.key || ""}.`;
+      }
+      if (typeof result.changedCount === "number") {
+        return `Updated ${result.changedCount} fields.`;
+      }
+      if (typeof result.trashedCount === "number") {
+        return `Moved ${result.trashedCount} items to trash.`;
+      }
+      if (result.noteKey) {
+        return `Wrote note ${result.noteKey}.`;
+      }
+      if (result.commandId) {
+        return `Triggered command ${result.commandId}.`;
+      }
+      if (Array.isArray(result.commands)) {
+        return `Found ${result.commands.length} callable commands.`;
+      }
+      if (Array.isArray(result.childPrefixes)) {
+        return `Returned ${result.childPrefixes.length} preference prefixes.`;
+      }
+      if (Array.isArray(result.preferences)) {
+        return `Returned ${result.preferences.length} preferences.`;
+      }
+      if (result.restartRequested) {
+        return "Requested Zotero restart.";
+      }
+      if (result.pageInfo && typeof result.pageInfo.page === "number") {
+        return `Returned page ${result.pageInfo.page}.`;
+      }
+      if (Array.isArray(result.items)) {
+        return `Returned ${result.items.length} items.`;
+      }
+      if (Array.isArray(result.results)) {
+        return `Found ${result.results.length} web results.`;
+      }
+      if (Array.isArray(result.pages)) {
+        const textPages = result.pages.filter((page) => page && page.text).length;
+        return `Read ${result.pages.length} pages, ${textPages} with text.`;
+      }
+      if (typeof result.markdown === "string" && result.markdown.length) {
+        return `Fetched page (about ${result.markdown.length} characters).`;
+      }
+      if (result.summary) {
+        return this.truncateText(result.summary, 220);
+      }
+      if (result.ok === true) {
+        return "Succeeded.";
+      }
+      return this.truncateText(JSON.stringify(result), 220);
+    }
     if (!result) {
       return "未返回结果。";
     }
@@ -880,10 +1114,10 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         details: JSON.stringify({
           libraryID,
           libraryName: this.getLibraryName(libraryID),
-          scope: args.scope || "当前激活库整库元数据",
+          scope: args.scope || (this.isEnglishUI() ? "Full-library metadata for the current active library" : "当前激活库整库元数据"),
           reason: args.reason || ""
         }, null, 2),
-        approveLabel: "允许本会话读取整库元数据",
+        approveLabel: this.isEnglishUI() ? "Allow this session to read full-library metadata" : "允许本会话读取整库元数据",
         allowRemember: false,
         rememberKey: ""
       };
@@ -909,11 +1143,11 @@ var ZoteroAssistantPluginApprovalUi = (() => {
           proposedRememberPrefix: rememberPrefix,
           reason: args.reason || ""
         }, null, 2),
-        approveLabel: "允许本次设置修改",
+        approveLabel: this.isEnglishUI() ? "Allow this preference change" : "允许本次设置修改",
         allowRemember: meta.isWritable && !meta.isHiddenOrInternal && !!rememberPrefix,
         rememberKey: `set_preference_prefix:${rememberPrefix}`,
         rememberPrefix,
-        rememberLabel: "记住此前缀"
+        rememberLabel: this.isEnglishUI() ? "Remember this prefix" : "记住此前缀"
       };
     }
     if (toolName === "request_zotero_restart") {
@@ -924,7 +1158,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         args,
         summary: this.approvalSummary(toolName, args),
         details: JSON.stringify({ reason: args.reason || "" }, null, 2),
-        approveLabel: "允许重启 Zotero",
+        approveLabel: this.isEnglishUI() ? "Allow Zotero restart" : "允许重启 Zotero",
         allowRemember: false,
         rememberKey: ""
       };
@@ -936,7 +1170,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       args,
       summary: this.approvalSummary(toolName, args),
       details: JSON.stringify(args, null, 2),
-      approveLabel: "允许本次",
+      approveLabel: this.isEnglishUI() ? "Allow once" : "允许本次",
       allowRemember: true,
       rememberKey: this.approvalKey(toolName, args)
     };

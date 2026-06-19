@@ -23,6 +23,7 @@ var ZoteroAssistant = (() => {
   }
 
   Object.assign(AssistantPlugin.prototype,
+    ZoteroAssistantI18n,
     ZoteroAssistantPluginApprovalUi,
     ZoteroAssistantPluginChat,
     ZoteroAssistantPluginCore,

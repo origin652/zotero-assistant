@@ -144,16 +144,16 @@ var ZoteroAssistantPluginTask = (() => {
       await this.safeUpdateSessionMemoryForTask(this.task.phase);
       if (state) {
         const prefix = error && error.source === "tool"
-          ? "工具执行失败"
+          ? this.t("toolExecutionFailed")
           : error && error.source === "compression"
-            ? "上下文压缩失败"
-            : "模型调用失败";
+            ? this.t("contextCompressionFailed")
+            : this.t("modelCallFailed");
         const detail = `${prefix}：${error}`;
         this.showMessage(state, detail);
         if (state.chatOpen) {
           state.chatNotice = detail;
         }
-        this.pushChatTurnReadable(`【任务已暂停】${detail}`);
+        this.pushChatTurnReadable(this.t("pausedPrefix", { detail }));
         this.flushChatTurnToDisplay();
       }
     } finally {
@@ -445,7 +445,7 @@ var ZoteroAssistantPluginTask = (() => {
       `The task has reached the maximum loop limit (${MAX_TASK_LOOPS}).`,
       "Tool use is now disabled.",
       "Do not call any tools and do not return JSON.",
-      "Return a concise Chinese final result that states: what has already been done, what remains unfinished or uncertain, and what the user should check next."
+      "Return a concise final result in the selected UI language that states: what has already been done, what remains unfinished or uncertain, and what the user should check next."
     ].join(" ");
     this.task.phase = "loop_limit_summary";
     this.log("task.loop_limit_summary", { id: this.task.id, loopCount: this.task.loopCount });
@@ -460,7 +460,7 @@ var ZoteroAssistantPluginTask = (() => {
       if (!text) {
         this.task.status = "paused";
         this.task.phase = "loop_limit";
-        this.task.error = "达到轮次上限后，最终总结轮没有返回可用文本。";
+        this.task.error = this.t("loopLimitMissing");
         this.log("task.paused", { id: this.task.id, reason: "loop_limit_final_text_missing" });
         await this.maybeWriteDebugReport("loop_limit_final_text_missing", {
           reason: this.task.error,
@@ -489,7 +489,7 @@ var ZoteroAssistantPluginTask = (() => {
     } catch (error) {
       this.task.status = "paused";
       this.task.phase = "loop_limit";
-      this.task.error = `达到轮次上限后，最终总结轮失败：${error}`;
+      this.task.error = this.t("loopLimitFailed", { error });
       this.log("task.paused", {
         id: this.task.id,
         reason: this.task.error,

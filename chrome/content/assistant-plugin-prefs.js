@@ -233,6 +233,7 @@ var ZoteroAssistantPluginPrefs = (() => {
     }
     if ([
       PREFS.webSearchProvider,
+      PREFS.uiLanguage,
       PREFS.selectionAskShortcut,
       PREFS.debugMode,
       PREFS.sessionMemoryEnabled,
@@ -288,6 +289,9 @@ var ZoteroAssistantPluginPrefs = (() => {
     }
     if (meta.name === PREFS.webSearchProvider && !["auto", "brave", "duckduckgo"].includes(value)) {
       throw new Error("webSearchProvider 只能是 auto、brave 或 duckduckgo。");
+    }
+    if (meta.name === PREFS.uiLanguage && !["auto", "zh-CN", "en-US"].includes(value)) {
+      throw new Error("uiLanguage 只能是 auto、zh-CN 或 en-US。");
     }
     if (meta.name === PREFS.selectionAskShortcut && (typeof value !== "string" || !value.trim())) {
       throw new Error("selectionAskShortcut 必须是非空字符串，例如 Ctrl+Alt+Q。");
@@ -474,6 +478,7 @@ var ZoteroAssistantPluginPrefs = (() => {
       PREFS.debugOutputDir,
       PREFS.braveSearchApiKey,
       PREFS.webSearchProvider,
+      PREFS.uiLanguage,
       PREFS.selectionAskShortcut,
       PREFS.sessionMemoryEnabled,
       PREFS.autoCompressionEnabled,

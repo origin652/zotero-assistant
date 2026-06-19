@@ -44,6 +44,7 @@ Configure:
 - API key
 - API mode
 - safety mode
+- UI language (`Auto`, Chinese, or English)
 
 The API should be compatible with chat or responses-style model calls used by the plugin.
 
