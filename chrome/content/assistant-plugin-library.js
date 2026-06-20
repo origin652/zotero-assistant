@@ -55,6 +55,7 @@ var ZoteroAssistantPluginLibrary = (() => {
     MAX_METADATA_ADHOC_CANDIDATES,
     MAX_METADATA_SOURCE_REQUESTS_PER_ITEM,
     METADATA_TEXT_PROBE_CHARS,
+    MAX_CREATED_ITEMS_PER_MODEL_ROUND,
     MAX_EXPORT_ITEMS,
     MAX_EXPORT_PER_MODEL_ROUND,
     MAX_EXPORT_TEXT_CHARS,
@@ -1302,6 +1303,54 @@ var ZoteroAssistantPluginLibrary = (() => {
     return raw.length === 10 || raw.length === 13 ? raw : "";
   },
 
+  isbn10To13(isbn10) {
+    const raw = this.normalizeISBN(isbn10);
+    if (raw.length !== 10) {
+      return "";
+    }
+    const stem = `978${raw.slice(0, 9)}`;
+    let sum = 0;
+    for (let i = 0; i < stem.length; i++) {
+      sum += Number(stem[i]) * (i % 2 === 0 ? 1 : 3);
+    }
+    const check = (10 - (sum % 10)) % 10;
+    return `${stem}${check}`;
+  },
+
+  isbn13To10(isbn13) {
+    const raw = this.normalizeISBN(isbn13);
+    if (raw.length !== 13 || !raw.startsWith("978")) {
+      return "";
+    }
+    const stem = raw.slice(3, 12);
+    let sum = 0;
+    for (let i = 0; i < stem.length; i++) {
+      sum += Number(stem[i]) * (10 - i);
+    }
+    const checkValue = (11 - (sum % 11)) % 11;
+    const check = checkValue === 10 ? "X" : String(checkValue);
+    return `${stem}${check}`;
+  },
+
+  isbnVariants(value) {
+    const raw = this.normalizeISBN(value);
+    if (!raw) {
+      return [];
+    }
+    const variants = [raw];
+    const converted = raw.length === 10 ? this.isbn10To13(raw) : this.isbn13To10(raw);
+    if (converted && !variants.includes(converted)) {
+      variants.push(converted);
+    }
+    return variants;
+  },
+
+  isbnMatches(a, b) {
+    const aa = this.isbnVariants(a);
+    const bb = this.isbnVariants(b);
+    return aa.some((value) => bb.includes(value));
+  },
+
   normalizeArxivID(value) {
     return String(value || "")
       .trim()
@@ -1757,7 +1806,10 @@ var ZoteroAssistantPluginLibrary = (() => {
   },
 
   candidateFromOpenLibrary(row) {
-    const isbn = this.normalizeISBN(Array.isArray(row.isbn) ? row.isbn[0] : row.isbn || row.key || "");
+    const isbns = (Array.isArray(row.isbn) ? row.isbn : [row.isbn, row.key])
+      .map((value) => this.normalizeISBN(value))
+      .filter(Boolean);
+    const isbn = isbns.find((value) => value.length === 13) || isbns[0] || "";
     const authors = row.author_name || [];
     const publisher = Array.isArray(row.publisher) ? row.publisher[0] : "";
     return this.metadataCandidate("openlibrary", row, {
@@ -1770,6 +1822,36 @@ var ZoteroAssistantPluginLibrary = (() => {
       language: Array.isArray(row.language) ? row.language[0] : "",
       url: row.key ? `https://openlibrary.org${row.key}` : ""
     }, [row.key ? `https://openlibrary.org${row.key}` : ""], isbn ? { ISBN: isbn } : {});
+  },
+
+  candidateFromOpenLibraryBookAPI(row, requestedISBN) {
+    const identifiers = row && row.identifiers || {};
+    const isbns = []
+      .concat(identifiers.isbn_13 || [])
+      .concat(identifiers.isbn_10 || [])
+      .concat(requestedISBN || [])
+      .map((value) => this.normalizeISBN(value))
+      .filter(Boolean);
+    const requested = this.normalizeISBN(requestedISBN || "");
+    const isbn = isbns.find((value) => requested && this.isbnMatches(requested, value))
+      || isbns.find((value) => value.length === 13)
+      || isbns[0]
+      || "";
+    const authors = (Array.isArray(row.authors) ? row.authors : [])
+      .map((author) => author && author.name)
+      .filter(Boolean);
+    const publishers = (Array.isArray(row.publishers) ? row.publishers : [])
+      .map((publisher) => publisher && publisher.name)
+      .filter(Boolean);
+    return this.metadataCandidate("openlibrary", row, {
+      itemType: "book",
+      title: row.title || "",
+      creators: this.metadataCreatorsFromNames(authors),
+      date: row.publish_date || "",
+      ISBN: isbn,
+      publisher: publishers[0] || "",
+      url: row.url || ""
+    }, [row.url], isbn ? { ISBN: isbn } : {});
   },
 
   candidateFromGoogleBook(row) {
@@ -1905,6 +1987,14 @@ var ZoteroAssistantPluginLibrary = (() => {
     const out = [];
     const isbn = ctx.identifiers.isbns[0] || "";
     const query = this.metadataQuery(ctx);
+    if (isbn && budget.take()) {
+      const url = `https://openlibrary.org/api/books?bibkeys=${encodeURIComponent(`ISBN:${isbn}`)}&jscmd=data&format=json`;
+      const res = await this.metadataFetchJSON(url, "openlibrary");
+      const row = res.ok && res.json && res.json[`ISBN:${isbn}`];
+      if (row) {
+        out.push(this.candidateFromOpenLibraryBookAPI(row, isbn));
+      }
+    }
     if ((isbn || query) && budget.take()) {
       const url = isbn
         ? `https://openlibrary.org/search.json?isbn=${encodeURIComponent(isbn)}&limit=3`
@@ -2033,8 +2123,10 @@ var ZoteroAssistantPluginLibrary = (() => {
       if (metadata.DOI && ctx.identifiers.dois.some((doi) => this.cleanDOI(doi).toLowerCase() === this.cleanDOI(metadata.DOI).toLowerCase())) {
         matched.DOI = this.cleanDOI(metadata.DOI);
       }
-      if (metadata.ISBN && ctx.identifiers.isbns.some((isbn) => this.normalizeISBN(isbn) === this.normalizeISBN(metadata.ISBN))) {
-        matched.ISBN = this.normalizeISBN(metadata.ISBN);
+      const candidateISBN = metadata.ISBN || candidateIdentifiers.ISBN || "";
+      const inputISBN = ctx.identifiers.isbns.find((isbn) => this.isbnMatches(isbn, candidateISBN));
+      if (candidateISBN && inputISBN) {
+        matched.ISBN = this.normalizeISBN(inputISBN);
       }
       if (candidateIdentifiers.arXiv && ctx.identifiers.arxiv.some((id) => this.normalizeArxivID(id) === this.normalizeArxivID(candidateIdentifiers.arXiv))) {
         matched.arXiv = candidateIdentifiers.arXiv;
@@ -2067,8 +2159,10 @@ var ZoteroAssistantPluginLibrary = (() => {
     if (metadata.DOI && ctx.identifiers.dois.some((doi) => this.cleanDOI(doi).toLowerCase() === this.cleanDOI(metadata.DOI).toLowerCase())) {
       matched.DOI = this.cleanDOI(metadata.DOI);
     }
-    if (metadata.ISBN && ctx.identifiers.isbns.some((isbn) => this.normalizeISBN(isbn) === this.normalizeISBN(metadata.ISBN))) {
-      matched.ISBN = this.normalizeISBN(metadata.ISBN);
+    const candidateISBN = metadata.ISBN || candidateIdentifiers.ISBN || "";
+    const inputISBN = ctx.identifiers.isbns.find((isbn) => this.isbnMatches(isbn, candidateISBN));
+    if (candidateISBN && inputISBN) {
+      matched.ISBN = this.normalizeISBN(inputISBN);
     }
     if (candidateIdentifiers.arXiv && ctx.identifiers.arxiv.some((id) => this.normalizeArxivID(id) === this.normalizeArxivID(candidateIdentifiers.arXiv))) {
       matched.arXiv = candidateIdentifiers.arXiv;
@@ -3507,6 +3601,106 @@ var ZoteroAssistantPluginLibrary = (() => {
     });
     this.markLibraryIndexDirty(this.currentTaskLibraryID());
     return { ok: true, collection: this.collectionSummary(collection) };
+  },
+
+  async toolCreateItem(args) {
+    args = args || {};
+    if (!this.task) {
+      return { ok: false, error: "没有活动任务。" };
+    }
+    if ((this.task.roundCreatedItems || 0) >= MAX_CREATED_ITEMS_PER_MODEL_ROUND) {
+      return { ok: false, error: `本轮模型调用已达到最多 ${MAX_CREATED_ITEMS_PER_MODEL_ROUND} 个新建条目的限制。请下一轮再建。` };
+    }
+    const itemType = String(args.itemType || "").trim();
+    if (!this.isSupportedParentItemType(itemType)) {
+      return { ok: false, error: `不支持的新建条目类型：${itemType || "空值"}。请使用 Zotero 常规顶层类型，例如 book、journalArticle、report、thesis、document、webpage。` };
+    }
+    const fields = args.fields && typeof args.fields === "object" && !Array.isArray(args.fields)
+      ? Object.assign({}, args.fields)
+      : {};
+    let creatorInput = Array.isArray(args.creators) ? args.creators : [];
+    if (!creatorInput.length && Array.isArray(fields.creators)) {
+      creatorInput = fields.creators;
+    }
+    for (const forbidden of ["itemType", "itemTypeID", "creators"]) {
+      if (Object.prototype.hasOwnProperty.call(fields, forbidden)) {
+        delete fields[forbidden];
+      }
+    }
+    const nonEmptyFieldNames = Object.entries(fields)
+      .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+      .map(([name]) => name);
+    const creators = this.normalizeCreators(creatorInput);
+    const tags = (Array.isArray(args.tags) ? args.tags : [])
+      .map((tag) => String(tag || "").trim())
+      .filter(Boolean);
+    if (!nonEmptyFieldNames.length && !creators.length && !tags.length) {
+      return { ok: false, error: "create_item 需要至少一个非空字段、creator 或 tag。通常应先用 lookup_metadata_candidates 查到候选，再用候选元数据创建条目。" };
+    }
+
+    const collectionKey = String(args.collectionKey || "").trim();
+    let collection = null;
+    if (collectionKey) {
+      collection = await this.getCollectionByKey(collectionKey);
+      if (!collection) {
+        return { ok: false, error: `找不到目标 collection：${collectionKey}` };
+      }
+    }
+
+    const item = new Zotero.Item(itemType);
+    item.libraryID = this.currentTaskLibraryID();
+    for (const [field, value] of Object.entries(fields)) {
+      if (value === undefined || value === null || String(value).trim() === "") {
+        continue;
+      }
+      try {
+        item.setField(field, value);
+      } catch (error) {
+        return { ok: false, error: `字段 ${field} 不能用于 ${itemType}：${error}` };
+      }
+    }
+    if (creators.length && typeof item.setCreators === "function") {
+      item.setCreators(creators);
+    }
+    for (const tag of tags) {
+      item.addTag(tag);
+    }
+
+    await item.saveTx();
+    this.task.roundCreatedItems = (this.task.roundCreatedItems || 0) + 1;
+    this.task.createdItems = (this.task.createdItems || 0) + 1;
+    let collectionAdded = false;
+    let collectionError = "";
+    if (collection) {
+      try {
+        await this.addItemToCollectionIDs(item.id, [collection.id]);
+        collectionAdded = true;
+      } catch (error) {
+        collectionError = String(error);
+      }
+    }
+    this.undoStack.push({ type: "trash_item", itemID: item.id, summary: `撤销创建 ${itemType} 条目` });
+    this.markLibraryIndexDirty(this.currentTaskLibraryID());
+    this.log("item.create", {
+      itemKey: item.key,
+      itemType,
+      fieldNames: nonEmptyFieldNames,
+      creatorCount: creators.length,
+      tagCount: tags.length,
+      collectionKey,
+      collectionAdded
+    });
+    return {
+      ok: true,
+      item: this.itemSummary(item),
+      itemKey: item.key,
+      itemType,
+      changedFieldNames: nonEmptyFieldNames,
+      changedCreators: creators.length > 0,
+      addedTags: tags,
+      collectionKey: collectionAdded ? collectionKey : undefined,
+      warning: collectionError ? `条目已创建，但加入 collection 失败：${collectionError}` : undefined
+    };
   },
 
   async toolCreateParentItem(args) {

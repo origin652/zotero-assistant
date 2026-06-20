@@ -573,13 +573,16 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     if (this.isEnglishUI()) {
       const summaries = {
         request_expanded_context: `AI requests session access to full-library metadata for "${this.getLibraryName(this.currentTaskLibraryID())}". Reason: ${args.reason || unknown}`,
+        create_item: `AI requests creating a new ${args.itemType || ""} Zotero item: ${(args.fields && args.fields.title) || "untitled"}. Reason: ${args.reason || unknown}`,
         create_parent_item: `AI requests creating a ${args.itemType || ""} parent item for attachment ${args.attachmentKey || ""}, then moving the attachment under it.`,
         update_metadata: `AI requests modifying metadata${Array.isArray(args.creators) ? " and creators" : ""} for item ${args.itemKey || ""}.`,
         set_preference: `AI requests changing preference ${args.name || ""}. Reason: ${args.reason || unknown}`,
         request_zotero_restart: `AI requests restarting Zotero. Reason: ${args.reason || unknown}`,
         move_to_trash: `AI requests moving ${args.itemKeys ? args.itemKeys.length : 0} items to trash. Reason: ${args.reason || unknown}`,
         trigger_plugin_command: `AI requests running another plugin command: ${args.commandId || ""}. ${args.summary || ""}`,
-        lookup_metadata_candidates: `AI requests looking up online metadata candidates for ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} items${args.useTextProbe === false ? "" : " and may read a small leading PDF/EPUB text snippet"}. Reason: ${args.reason || unknown}`,
+        lookup_metadata_candidates: String(args.query || "").trim()
+          ? `AI requests looking up online bibliographic metadata for query "${this.truncateText(args.query, 120)}". Reason: ${args.reason || unknown}`
+          : `AI requests looking up online metadata candidates for ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} items${args.useTextProbe === false ? "" : " and may read a small leading PDF/EPUB text snippet"}. Reason: ${args.reason || unknown}`,
         export_items_citation: `AI requests exporting ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} items as ${args.format || "a citation format"}${String(args.saveToPath || "").trim() ? ` and writing the file to ${args.saveToPath}` : " (chat text only, no file)"}. Reason: ${args.reason || unknown}`,
         run_batch_plan: this.batchApprovalSummary(args, true)
       };
@@ -587,13 +590,16 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     }
     const summaries = {
       request_expanded_context: `AI 请求开放“${this.getLibraryName(this.currentTaskLibraryID())}”在本会话中的整库元数据读取。原因：${args.reason || "未说明"}`,
+      create_item: `AI 请求新建一个 ${args.itemType || ""} Zotero 条目：${(args.fields && args.fields.title) || "未命名"}。原因：${args.reason || "未说明"}`,
       create_parent_item: `AI 请求为附件 ${args.attachmentKey || ""} 创建一个 ${args.itemType || ""} 父条目，并将该附件挂到新父条目下。`,
       update_metadata: `AI 请求修改条目 ${args.itemKey || ""} 的元数据${Array.isArray(args.creators) ? " 和 creators" : ""}。`,
       set_preference: `AI 请求修改设置 ${args.name || ""}。原因：${args.reason || "未说明"}`,
       request_zotero_restart: `AI 请求重启 Zotero。原因：${args.reason || "未说明"}`,
       move_to_trash: `AI 请求将 ${args.itemKeys ? args.itemKeys.length : 0} 个条目移到回收站。原因：${args.reason || "未说明"}`,
       trigger_plugin_command: `AI 请求触发其他插件命令：${args.commandId || ""}。${args.summary || ""}`,
-      lookup_metadata_candidates: `AI 请求为 ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} 个条目联网查询元数据候选${args.useTextProbe === false ? "" : "，并可能读取 PDF/EPUB 开头少量文本作为查询线索"}。原因：${args.reason || "未说明"}`,
+      lookup_metadata_candidates: String(args.query || "").trim()
+        ? `AI 请求按查询“${this.truncateText(args.query, 120)}”联网检索文献元数据。原因：${args.reason || "未说明"}`
+        : `AI 请求为 ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} 个条目联网查询元数据候选${args.useTextProbe === false ? "" : "，并可能读取 PDF/EPUB 开头少量文本作为查询线索"}。原因：${args.reason || "未说明"}`,
       export_items_citation: `AI 请求将 ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} 个条目导出为 ${args.format || "某种引用格式"}${String(args.saveToPath || "").trim() ? `，并写入文件 ${args.saveToPath}` : "（仅在聊天中返回文本，不写文件）"}。原因：${args.reason || "未说明"}`,
       run_batch_plan: this.batchApprovalSummary(args, false)
     };
@@ -734,7 +740,8 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       return { required: true, allowed: false };
     }
     if (toolName === "lookup_metadata_candidates") {
-      const wantsProbe = !(args && args.useTextProbe === false);
+      const hasItemKeys = !!(args && Array.isArray(args.itemKeys) && args.itemKeys.length);
+      const wantsProbe = hasItemKeys && !(args && args.useTextProbe === false);
       if (!wantsProbe || mode === "open") {
         return { required: false, allowed: true };
       }
@@ -823,6 +830,8 @@ var ZoteroAssistantPluginApprovalUi = (() => {
           return this.truncateText(safeArgs.reason || "Needs full-library context.", 140);
         case "create_collection":
           return `Create collection: ${safeArgs.name || "Untitled"}${safeArgs.parentKey ? `; parent key: ${safeArgs.parentKey}` : ""}`;
+        case "create_item":
+          return `Create ${safeArgs.itemType || "item"}: ${safeArgs.fields && safeArgs.fields.title ? this.truncateText(safeArgs.fields.title, 120) : "untitled"}`;
         case "add_items_to_collection":
           return `Add ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} items to ${safeArgs.collectionKey || safeArgs.collectionName || "target collection"}`;
         case "add_tags":
@@ -885,6 +894,8 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         return this.truncateText(safeArgs.reason || "需要整库视角。", 140);
       case "create_collection":
         return `新建 collection：${safeArgs.name || "未命名"}${safeArgs.parentKey ? `；父级 key：${safeArgs.parentKey}` : ""}`;
+      case "create_item":
+        return `新建 ${safeArgs.itemType || "条目"}：${safeArgs.fields && safeArgs.fields.title ? this.truncateText(safeArgs.fields.title, 120) : "未命名"}`;
       case "add_items_to_collection":
         return `加入 ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} 条到 ${safeArgs.collectionKey || safeArgs.collectionName || "目标 collection"}`;
       case "add_tags":
@@ -1294,7 +1305,8 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       };
     }
     if (toolName === "lookup_metadata_candidates") {
-      const wantsProbe = !(args && args.useTextProbe === false);
+      const hasItemKeys = !!(args && Array.isArray(args.itemKeys) && args.itemKeys.length);
+      const wantsProbe = hasItemKeys && !(args && args.useTextProbe === false);
       if (!wantsProbe) {
         return null;
       }
@@ -1313,6 +1325,34 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         approveLabel: this.isEnglishUI() ? "Allow metadata lookup text probe" : "允许元数据查询读取开头文本",
         allowRemember: true,
         rememberKey: this.approvalKey(toolName, args)
+      };
+    }
+    if (toolName === "create_item") {
+      const safeArgs = args || {};
+      const fields = safeArgs.fields && typeof safeArgs.fields === "object" ? safeArgs.fields : {};
+      return {
+        id: callID,
+        kind: "create_item",
+        toolName,
+        args: safeArgs,
+        summary: this.approvalSummary(toolName, safeArgs),
+        details: JSON.stringify({
+          itemType: safeArgs.itemType || "",
+          title: fields.title || "",
+          DOI: fields.DOI || "",
+          ISBN: fields.ISBN || "",
+          url: fields.url || "",
+          publicationTitle: fields.publicationTitle || "",
+          publisher: fields.publisher || "",
+          date: fields.date || "",
+          creatorCount: Array.isArray(safeArgs.creators) ? safeArgs.creators.length : (Array.isArray(fields.creators) ? fields.creators.length : 0),
+          collectionKey: safeArgs.collectionKey || "",
+          tags: Array.isArray(safeArgs.tags) ? safeArgs.tags : [],
+          reason: safeArgs.reason || ""
+        }, null, 2),
+        approveLabel: this.isEnglishUI() ? "Allow creating this item" : "允许新建该条目",
+        allowRemember: true,
+        rememberKey: this.approvalKey(toolName, safeArgs)
       };
     }
     if (toolName === "run_batch_plan") {

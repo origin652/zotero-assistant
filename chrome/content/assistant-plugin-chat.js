@@ -1723,11 +1723,13 @@ var ZoteroAssistantPluginChat = (() => {
         "制定工具调用计划"
       ],
       createdCollections: 0,
+      createdItems: 0,
       loopCount: 0,
       roundLiveSearchCount: 0,
       roundWebFetchCount: 0,
       roundMetadataLookupCount: 0,
       roundCreatedCollections: 0,
+      roundCreatedItems: 0,
       roundProcessedItems: new Set(),
       processedItems: new Set(),
       contextInjected: false,
@@ -1947,6 +1949,7 @@ var ZoteroAssistantPluginChat = (() => {
       web_fetch: "抓取网页",
       lookup_metadata_candidates: "联网查元数据",
       create_collection: "创建分类",
+      create_item: "创建条目",
       add_tags: "添加标签",
       create_note: "创建笔记",
       append_note: "追加笔记",
@@ -1979,6 +1982,9 @@ var ZoteroAssistantPluginChat = (() => {
       detail = `${separator}${args.itemKeys.length} ${this.isEnglishUI() ? "items" : "条"}`;
     } else if (name === "create_collection" && args.name) {
       detail = `${separator}${args.name}`;
+    } else if (name === "create_item") {
+      const title = args.fields && args.fields.title ? args.fields.title : args.itemType || "";
+      detail = title ? `${separator}${String(title).slice(0, 60)}` : "";
     }
     return `${label}${detail}`;
   },

@@ -192,6 +192,7 @@ var ZoteroAssistantPluginTask = (() => {
     this.task.roundWebFetchCount = 0;
     this.task.roundMetadataLookupCount = 0;
     this.task.roundCreatedCollections = 0;
+    this.task.roundCreatedItems = 0;
     this.task.roundExportCount = 0;
     this.task.roundProcessedItems = new Set();
   },

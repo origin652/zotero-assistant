@@ -22,6 +22,7 @@ var ZoteroAssistantToolDispatch = (() => {
       web_fetch: (ctx, args) => ctx.toolWebFetch(args),
       lookup_metadata_candidates: (ctx, args) => ctx.toolLookupMetadataCandidates(args),
       create_collection: (ctx, args) => ctx.toolCreateCollection(args),
+      create_item: (ctx, args) => ctx.toolCreateItem(args),
       add_items_to_collection: (ctx, args) => ctx.toolAddItemsToCollection(args),
       add_tags: (ctx, args) => ctx.toolAddTags(args),
       create_note: (ctx, args) => ctx.toolCreateNote(args),
