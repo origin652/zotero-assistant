@@ -49,6 +49,12 @@ var ZoteroAssistantPluginLibrary = (() => {
     WEB_FETCH_TIMEOUT_MS,
     WEB_FETCH_MAX_BYTES,
     WEB_FETCH_MAX_CHARS,
+    MAX_METADATA_LOOKUP_ITEMS,
+    MAX_METADATA_LOOKUP_PER_MODEL_ROUND,
+    MAX_METADATA_CANDIDATES_PER_ITEM,
+    MAX_METADATA_ADHOC_CANDIDATES,
+    MAX_METADATA_SOURCE_REQUESTS_PER_ITEM,
+    METADATA_TEXT_PROBE_CHARS,
     MAX_EXPORT_ITEMS,
     MAX_EXPORT_PER_MODEL_ROUND,
     MAX_EXPORT_TEXT_CHARS,
@@ -77,7 +83,6 @@ var ZoteroAssistantPluginLibrary = (() => {
     safeCall,
     stripHTML,
     truncateText,
-    safeJSONStringify,
     mapCountsToSortedPairs,
     extractYear,
     isAttachmentItem,
@@ -1241,6 +1246,1101 @@ var ZoteroAssistantPluginLibrary = (() => {
       note: providerLabel === "duckduckgo_instant"
         ? "Instant Answer API 结果可能较少；可在设置中配置 Brave Search API key 以获得完整网页结果。"
         : ""
+    };
+  },
+
+  metadataSourceConfig() {
+    return {
+      semanticScholarEnabled: Zotero.Prefs.get(PREFS.metadataSemanticScholarEnabled, true) === true,
+      semanticScholarApiKey: String(Zotero.Prefs.get(PREFS.metadataSemanticScholarApiKey, true) || "").trim(),
+      pubMedEnabled: Zotero.Prefs.get(PREFS.metadataPubMedEnabled, true) === true,
+      pubMedApiKey: String(Zotero.Prefs.get(PREFS.metadataPubMedApiKey, true) || "").trim(),
+      pubMedEmail: String(Zotero.Prefs.get(PREFS.metadataPubMedEmail, true) || "").trim()
+    };
+  },
+
+  metadataExistingSnapshot(item) {
+    const fields = {};
+    for (const name of [
+      "title", "shortTitle", "date", "DOI", "ISBN", "ISSN", "publicationTitle",
+      "journalAbbreviation", "conferenceName", "proceedingsTitle", "publisher",
+      "place", "volume", "issue", "pages", "url", "abstractNote", "language"
+    ]) {
+      const value = safeCall(() => item.getField(name));
+      if (value !== undefined && value !== null && String(value).trim()) {
+        fields[name] = String(value).trim();
+      }
+    }
+    const creators = safeCall(() => item.getCreators());
+    return {
+      itemKey: item.key,
+      itemType: item.itemType,
+      fields,
+      creators: Array.isArray(creators) ? creators.map((creator) => this.creatorSnapshot(creator)).filter(Boolean) : [],
+      tags: this.itemTagNames(item)
+    };
+  },
+
+  metadataCreatorsText(creators) {
+    return (Array.isArray(creators) ? creators : [])
+      .map((creator) => creator.name || [creator.firstName, creator.lastName].filter(Boolean).join(" "))
+      .filter(Boolean)
+      .join("; ");
+  },
+
+  cleanDOI(value) {
+    let doi = String(value || "").trim();
+    doi = doi.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+    doi = doi.replace(/^doi:\s*/i, "");
+    doi = doi.replace(/[<>\s]+$/g, "");
+    doi = doi.replace(/[.,;:)\]\}]+$/g, "");
+    return /^10\.\d{4,9}\/\S+$/i.test(doi) ? doi : "";
+  },
+
+  normalizeISBN(value) {
+    const raw = String(value || "").replace(/[^0-9Xx]/g, "").toUpperCase();
+    return raw.length === 10 || raw.length === 13 ? raw : "";
+  },
+
+  normalizeArxivID(value) {
+    return String(value || "")
+      .trim()
+      .replace(/^https?:\/\/arxiv\.org\/(?:abs|pdf)\//i, "")
+      .replace(/\.pdf$/i, "")
+      .replace(/^arxiv:/i, "")
+      .replace(/v\d+$/i, "")
+      .toLowerCase();
+  },
+
+  extractMetadataIdentifiers(text) {
+    const source = String(text || "");
+    const dois = [];
+    const doiRe = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/ig;
+    let match;
+    while ((match = doiRe.exec(source)) && dois.length < 5) {
+      const doi = this.cleanDOI(match[0]);
+      if (doi && !dois.includes(doi)) {
+        dois.push(doi);
+      }
+    }
+    const isbns = [];
+    const isbnRe = /\b(?:ISBN(?:-1[03])?:?\s*)?((?:97[89][-\s]?)?[0-9][0-9Xx][0-9Xx][-\s0-9Xx]{6,18})\b/g;
+    while ((match = isbnRe.exec(source)) && isbns.length < 5) {
+      const isbn = this.normalizeISBN(match[1]);
+      if (isbn && !isbns.includes(isbn)) {
+        isbns.push(isbn);
+      }
+    }
+    const arxiv = [];
+    const arxivRe = /\barXiv\s*:\s*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?|[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?)/ig;
+    while ((match = arxivRe.exec(source)) && arxiv.length < 3) {
+      const id = String(match[1] || "").trim();
+      if (id && !arxiv.includes(id)) {
+        arxiv.push(id);
+      }
+    }
+    const bareArxivRe = /\b([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)\b/ig;
+    while ((match = bareArxivRe.exec(source)) && arxiv.length < 3) {
+      const id = String(match[1] || "").trim();
+      if (id && !arxiv.some((existing) => this.normalizeArxivID(existing) === this.normalizeArxivID(id))) {
+        arxiv.push(id);
+      }
+    }
+    const pmids = [];
+    const pmidRe = /\bPMID\s*:?\s*(\d{6,9})\b/ig;
+    while ((match = pmidRe.exec(source)) && pmids.length < 3) {
+      const id = String(match[1] || "").trim();
+      if (id && !pmids.includes(id)) {
+        pmids.push(id);
+      }
+    }
+    return { dois, isbns, arxiv, pmids };
+  },
+
+  mergeMetadataIdentifiers(...sets) {
+    const merged = { dois: [], isbns: [], arxiv: [], pmids: [] };
+    for (const set of sets) {
+      for (const key of Object.keys(merged)) {
+        for (const value of (set && set[key]) || []) {
+          if (value && !merged[key].includes(value)) {
+            merged[key].push(value);
+          }
+        }
+      }
+    }
+    return merged;
+  },
+
+  metadataTitleFromText(text) {
+    const lines = String(text || "")
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter((line) => line.length >= 12 && line.length <= 220)
+      .filter((line) => !/^(abstract|introduction|keywords|references|doi|isbn)\b/i.test(line));
+    return lines[0] || "";
+  },
+
+  async metadataTextProbe(item) {
+    const target = this.resolveFulltextTarget(item);
+    if (!target || this.attachmentReadPriority(target) <= 0) {
+      return { used: false, text: "", targetKey: target ? target.key : "", error: "没有可探测的 PDF/EPUB 附件。" };
+    }
+    const result = await this.readFulltextText(target);
+    if (!result || !result.ok || !result.text) {
+      return { used: false, text: "", targetKey: target.key, error: result && result.error || "读取开头文本失败。" };
+    }
+    return {
+      used: true,
+      targetKey: target.key,
+      source: result.source || "",
+      text: String(result.text).slice(0, METADATA_TEXT_PROBE_CHARS)
+    };
+  },
+
+  metadataLookupContext(item, textProbe) {
+    const existing = this.metadataExistingSnapshot(item);
+    const filename = isAttachmentItem(item) ? this.attachmentFilename(item) : "";
+    const attachment = isAttachmentItem(item) ? item : this.resolveFulltextTarget(item);
+    const attachmentFilename = attachment ? this.attachmentFilename(attachment) : filename;
+    const seedText = [
+      existing.fields.DOI,
+      existing.fields.ISBN,
+      existing.fields.url,
+      existing.fields.title,
+      filename,
+      attachmentFilename,
+      textProbe && textProbe.text
+    ].filter(Boolean).join("\n");
+    const identifiers = this.mergeMetadataIdentifiers(
+      this.extractMetadataIdentifiers(existing.fields.DOI || ""),
+      this.extractMetadataIdentifiers(existing.fields.ISBN || ""),
+      this.extractMetadataIdentifiers(seedText)
+    );
+    const title = existing.fields.title || this.metadataTitleFromText(textProbe && textProbe.text) || this.titleFromFilename(attachmentFilename || filename);
+    return {
+      item,
+      existing,
+      itemKey: item.key,
+      isAttachment: isAttachmentItem(item),
+      isTopLevelAttachment: isAttachmentItem(item) && !item.parentID,
+      attachmentKey: attachment ? attachment.key : "",
+      attachmentFilename,
+      attachmentKind: attachment ? this.attachmentKind(attachment) : "",
+      contentType: attachment ? String(attachment.attachmentContentType || "") : "",
+      title,
+      creatorsText: this.metadataCreatorsText(existing.creators),
+      year: extractYear(existing.fields.date || ""),
+      identifiers,
+      textProbe: textProbe ? {
+        used: !!textProbe.used,
+        targetKey: textProbe.targetKey || "",
+        source: textProbe.source || "",
+        error: textProbe.error || ""
+      } : { used: false }
+    };
+  },
+
+  titleFromFilename(filename) {
+    return String(filename || "")
+      .replace(/\.[A-Za-z0-9]{2,5}$/g, "")
+      .replace(/[_]+/g, " ")
+      .replace(/\s*[-–—]\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  },
+
+  metadataQuery(ctx) {
+    return [ctx.title, ctx.creatorsText, ctx.year].filter(Boolean).join(" ").trim();
+  },
+
+  metadataLookupContextFromQuery(args) {
+    const query = String(args.query || "").trim();
+    const hints = args.hints && typeof args.hints === "object" ? args.hints : {};
+    const seedParts = [
+      query,
+      hints.doi,
+      hints.isbn,
+      hints.arxiv,
+      hints.pmid,
+      hints.creators,
+      hints.year
+    ].filter(Boolean);
+    const seedText = seedParts.join("\n");
+    const identifiers = this.mergeMetadataIdentifiers(
+      this.extractMetadataIdentifiers(query),
+      this.extractMetadataIdentifiers(String(hints.doi || "")),
+      this.extractMetadataIdentifiers(String(hints.isbn || "")),
+      this.extractMetadataIdentifiers(seedText)
+    );
+    if (hints.doi) {
+      const d = this.cleanDOI(hints.doi);
+      if (d && !identifiers.dois.includes(d)) {
+        identifiers.dois.unshift(d);
+      }
+    }
+    if (hints.isbn) {
+      const i = this.normalizeISBN(hints.isbn);
+      if (i && !identifiers.isbns.includes(i)) {
+        identifiers.isbns.unshift(i);
+      }
+    }
+    if (hints.arxiv) {
+      const a = this.normalizeArxivID(hints.arxiv);
+      if (a && !identifiers.arxiv.includes(a)) {
+        identifiers.arxiv.unshift(a);
+      }
+    }
+    if (hints.pmid) {
+      const p = String(hints.pmid).replace(/\D/g, "");
+      if (p && !identifiers.pmids.includes(p)) {
+        identifiers.pmids.unshift(p);
+      }
+    }
+    let title = String(hints.title || "").trim();
+    if (!title) {
+      title = query
+        .replace(/10\.\d{4,9}\/[^\s]+/gi, " ")
+        .replace(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g, " ")
+        .replace(/\b\d{7,8}\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 280);
+    }
+    const creatorsText = String(hints.creators || "").trim();
+    const year = String(hints.year || extractYear(query) || "").trim();
+    return {
+      item: null,
+      adhoc: true,
+      existing: { fields: {}, creators: [] },
+      itemKey: "",
+      isAttachment: false,
+      isTopLevelAttachment: false,
+      attachmentKey: "",
+      attachmentFilename: "",
+      attachmentKind: "",
+      contentType: "",
+      title,
+      creatorsText,
+      year,
+      identifiers,
+      textProbe: { used: false }
+    };
+  },
+
+  metadataCacheKey(ctx, useTextProbe, config) {
+    if (ctx && ctx.adhoc) {
+      return JSON.stringify({
+        adhoc: true,
+        title: ctx.title,
+        creators: ctx.creatorsText,
+        year: ctx.year,
+        identifiers: ctx.identifiers,
+        semanticScholar: !!config.semanticScholarEnabled,
+        pubMed: !!config.pubMedEnabled
+      });
+    }
+    return JSON.stringify({
+      itemKey: ctx.itemKey,
+      useTextProbe: !!useTextProbe,
+      title: ctx.title,
+      creators: ctx.creatorsText,
+      year: ctx.year,
+      identifiers: ctx.identifiers,
+      semanticScholar: !!config.semanticScholarEnabled,
+      pubMed: !!config.pubMedEnabled
+    });
+  },
+
+  metadataEnsureRoundBudget(itemCount) {
+    const used = this.task.roundMetadataLookupCount || 0;
+    if (used + itemCount > MAX_METADATA_LOOKUP_PER_MODEL_ROUND) {
+      return {
+        ok: false,
+        error: `本轮最多联网查询 ${MAX_METADATA_LOOKUP_PER_MODEL_ROUND} 个条目的元数据候选；本轮已查询 ${used} 个，本次请求 ${itemCount} 个。`
+      };
+    }
+    return { ok: true };
+  },
+
+  async metadataFetchJSON(url, source, headers = {}) {
+    const normalized = this.normalizeWebUrl(url);
+    if (!normalized) {
+      return { ok: false, source, error: "无效或不允许的 URL。" };
+    }
+    try {
+      const response = await this.fetchWithTimeout(normalized, {
+        timeoutMs: WEB_FETCH_TIMEOUT_MS,
+        headers: Object.assign({
+          Accept: "application/json,application/vnd.citationstyles.csl+json;q=0.9,*/*;q=0.8",
+          "User-Agent": WEB_SEARCH_USER_AGENT
+        }, headers)
+      });
+      const raw = await this.readResponseTextLimited(response, 300000);
+      if (!response.ok) {
+        return { ok: false, source, error: `HTTP ${response.status}${raw ? `: ${raw.slice(0, 180)}` : ""}` };
+      }
+      return { ok: true, source, json: raw ? JSON.parse(raw) : null, url: normalized };
+    } catch (error) {
+      return { ok: false, source, error: String(error), url: normalized };
+    }
+  },
+
+  async metadataFetchText(url, source, accept = "application/xml,text/xml,text/plain,*/*") {
+    const normalized = this.normalizeWebUrl(url);
+    if (!normalized) {
+      return { ok: false, source, error: "无效或不允许的 URL。" };
+    }
+    try {
+      const response = await this.fetchWithTimeout(normalized, {
+        timeoutMs: WEB_FETCH_TIMEOUT_MS,
+        headers: { Accept: accept, "User-Agent": WEB_SEARCH_USER_AGENT }
+      });
+      const text = await this.readResponseTextLimited(response, 300000);
+      if (!response.ok) {
+        return { ok: false, source, error: `HTTP ${response.status}${text ? `: ${text.slice(0, 180)}` : ""}` };
+      }
+      return { ok: true, source, text, url: normalized };
+    } catch (error) {
+      return { ok: false, source, error: String(error), url: normalized };
+    }
+  },
+
+  metadataTextContent(xmlText, tagName) {
+    const re = new RegExp(`<[^:>]*:?${tagName}[^>]*>([\\s\\S]*?)<\\/[^:>]*:?${tagName}>`, "i");
+    const match = String(xmlText || "").match(re);
+    return match ? this.decodeXMLText(match[1]) : "";
+  },
+
+  decodeXMLText(value) {
+    return String(value || "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, "\"")
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  },
+
+  metadataCreatorsFromNames(names, creatorType = "author") {
+    return (Array.isArray(names) ? names : [])
+      .map((name) => String(name || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .map((name) => {
+        const parts = name.split(/\s+/);
+        if (parts.length <= 1) {
+          return { name, creatorType };
+        }
+        return { firstName: parts.slice(0, -1).join(" "), lastName: parts[parts.length - 1], creatorType };
+      });
+  },
+
+  metadataCreatorsFromCrossref(creators) {
+    return (Array.isArray(creators) ? creators : []).map((creator) => ({
+      firstName: String(creator.given || "").trim(),
+      lastName: String(creator.family || creator.name || "").trim(),
+      name: creator.name && !creator.family ? String(creator.name).trim() : "",
+      creatorType: "author"
+    })).filter((creator) => creator.lastName || creator.name);
+  },
+
+  metadataYearFromParts(parts) {
+    const dateParts = parts && Array.isArray(parts["date-parts"]) ? parts["date-parts"][0] : null;
+    return dateParts && dateParts[0] ? String(dateParts[0]) : "";
+  },
+
+  metadataCandidate(source, raw, metadata, evidenceLinks = [], matchedIdentifiers = {}) {
+    const clean = Object.assign({}, metadata || {});
+    if (clean.DOI) {
+      clean.DOI = this.cleanDOI(clean.DOI) || String(clean.DOI || "").trim();
+    }
+    if (clean.ISBN) {
+      clean.ISBN = this.normalizeISBN(clean.ISBN) || String(clean.ISBN || "").trim();
+    }
+    return {
+      source,
+      sourceRecordID: String(raw && (raw.id || raw.DOI || raw.key || raw.pmid || raw.url) || ""),
+      rawTitle: clean.title || "",
+      metadata: clean,
+      creators: Array.isArray(clean.creators) ? clean.creators : [],
+      matchedIdentifiers,
+      evidenceLinks: evidenceLinks.filter(Boolean)
+    };
+  },
+
+  crossrefTypeToItemType(type) {
+    const value = String(type || "");
+    if (/book-chapter|book-section/i.test(value)) {
+      return "bookSection";
+    }
+    if (/book|monograph|reference/i.test(value)) {
+      return "book";
+    }
+    if (/proceedings|conference/i.test(value)) {
+      return "conferencePaper";
+    }
+    if (/posted-content|preprint/i.test(value)) {
+      return "preprint";
+    }
+    return "journalArticle";
+  },
+
+  candidateFromCrossref(row) {
+    const title = Array.isArray(row.title) ? row.title[0] : row.title;
+    const journal = Array.isArray(row["container-title"]) ? row["container-title"][0] : "";
+    const publisher = row.publisher || "";
+    const year = this.metadataYearFromParts(row["published-print"] || row["published-online"] || row.issued);
+    const doi = this.cleanDOI(row.DOI || "");
+    return this.metadataCandidate("crossref", row, {
+      itemType: this.crossrefTypeToItemType(row.type),
+      title,
+      creators: this.metadataCreatorsFromCrossref(row.author),
+      date: year,
+      DOI: doi,
+      ISBN: Array.isArray(row.ISBN) ? row.ISBN[0] : "",
+      ISSN: Array.isArray(row.ISSN) ? row.ISSN[0] : "",
+      publicationTitle: journal,
+      publisher,
+      volume: row.volume || "",
+      issue: row.issue || "",
+      pages: row.page || "",
+      url: row.URL || (doi ? `https://doi.org/${doi}` : ""),
+      abstractNote: stripHTML(row.abstract || ""),
+      language: row.language || ""
+    }, [row.URL, doi ? `https://doi.org/${doi}` : ""], doi ? { DOI: doi } : {});
+  },
+
+  candidateFromDataCite(row) {
+    const attrs = row && row.attributes || {};
+    const doi = this.cleanDOI(attrs.doi || row.id || "");
+    const creators = (attrs.creators || []).map((creator) => {
+      const name = creator.name || "";
+      const given = creator.givenName || "";
+      const family = creator.familyName || "";
+      return family ? { firstName: given, lastName: family, creatorType: "author" } : { name, creatorType: "author" };
+    }).filter((creator) => creator.lastName || creator.name);
+    const title = Array.isArray(attrs.titles) && attrs.titles[0] ? attrs.titles[0].title : "";
+    return this.metadataCandidate("datacite", row, {
+      itemType: "journalArticle",
+      title,
+      creators,
+      date: attrs.publicationYear ? String(attrs.publicationYear) : "",
+      DOI: doi,
+      publisher: attrs.publisher || "",
+      url: attrs.url || (doi ? `https://doi.org/${doi}` : ""),
+      abstractNote: Array.isArray(attrs.descriptions) && attrs.descriptions[0] ? stripHTML(attrs.descriptions[0].description || "") : "",
+      language: attrs.language || ""
+    }, [attrs.url, doi ? `https://doi.org/${doi}` : ""], doi ? { DOI: doi } : {});
+  },
+
+  candidateFromOpenAlex(row) {
+    const doi = this.cleanDOI(row.doi || "");
+    const authorships = Array.isArray(row.authorships) ? row.authorships : [];
+    const creators = authorships.map((a) => a && a.author && a.author.display_name).filter(Boolean);
+    const host = row.primary_location && row.primary_location.source || {};
+    const biblio = row.biblio || {};
+    const pages = [biblio.first_page, biblio.last_page].filter(Boolean).join("-");
+    return this.metadataCandidate("openalex", row, {
+      itemType: row.type === "book" ? "book" : row.type === "dissertation" ? "thesis" : "journalArticle",
+      title: row.title || row.display_name || "",
+      creators: this.metadataCreatorsFromNames(creators),
+      date: row.publication_year ? String(row.publication_year) : "",
+      DOI: doi,
+      publicationTitle: host.display_name || "",
+      ISSN: Array.isArray(host.issn) ? host.issn[0] : "",
+      volume: biblio.volume || "",
+      issue: biblio.issue || "",
+      pages,
+      url: doi ? `https://doi.org/${doi}` : (row.id || "")
+    }, [row.id, doi ? `https://doi.org/${doi}` : ""], doi ? { DOI: doi } : {});
+  },
+
+  candidateFromOpenLibrary(row) {
+    const isbn = this.normalizeISBN(Array.isArray(row.isbn) ? row.isbn[0] : row.isbn || row.key || "");
+    const authors = row.author_name || [];
+    const publisher = Array.isArray(row.publisher) ? row.publisher[0] : "";
+    return this.metadataCandidate("openlibrary", row, {
+      itemType: "book",
+      title: row.title || "",
+      creators: this.metadataCreatorsFromNames(authors),
+      date: row.first_publish_year ? String(row.first_publish_year) : "",
+      ISBN: isbn,
+      publisher,
+      language: Array.isArray(row.language) ? row.language[0] : "",
+      url: row.key ? `https://openlibrary.org${row.key}` : ""
+    }, [row.key ? `https://openlibrary.org${row.key}` : ""], isbn ? { ISBN: isbn } : {});
+  },
+
+  candidateFromGoogleBook(row) {
+    const info = row && row.volumeInfo || {};
+    const industry = Array.isArray(info.industryIdentifiers) ? info.industryIdentifiers : [];
+    const isbn = this.normalizeISBN((industry.find((id) => /ISBN_13/i.test(id.type || "")) || industry[0] || {}).identifier || "");
+    return this.metadataCandidate("googlebooks", row, {
+      itemType: "book",
+      title: [info.title, info.subtitle].filter(Boolean).join(": "),
+      creators: this.metadataCreatorsFromNames(info.authors || []),
+      date: info.publishedDate || "",
+      ISBN: isbn,
+      publisher: info.publisher || "",
+      abstractNote: info.description || "",
+      language: info.language || "",
+      url: info.infoLink || info.canonicalVolumeLink || ""
+    }, [info.infoLink, info.canonicalVolumeLink], isbn ? { ISBN: isbn } : {});
+  },
+
+  candidateFromSemanticScholar(row) {
+    const external = row.externalIds || {};
+    const doi = this.cleanDOI(external.DOI || "");
+    const pmid = external.PubMed || "";
+    const arxiv = external.ArXiv || "";
+    const venue = row.venue || row.journal && row.journal.name || "";
+    return this.metadataCandidate("semantic_scholar", row, {
+      itemType: arxiv ? "preprint" : "journalArticle",
+      title: row.title || "",
+      creators: this.metadataCreatorsFromNames((row.authors || []).map((a) => a.name)),
+      date: row.year ? String(row.year) : "",
+      DOI: doi,
+      publicationTitle: venue,
+      abstractNote: row.abstract || "",
+      url: row.url || (doi ? `https://doi.org/${doi}` : "")
+    }, [row.url, doi ? `https://doi.org/${doi}` : ""], Object.assign({}, doi ? { DOI: doi } : {}, pmid ? { PMID: pmid } : {}, arxiv ? { arXiv: arxiv } : {}));
+  },
+
+  candidateFromArxivEntry(entryText) {
+    const idUrl = this.metadataTextContent(entryText, "id");
+    const id = (idUrl.match(/abs\/(.+)$/) || [])[1] || idUrl;
+    const authors = [];
+    const authorRe = /<author>\s*<name>([\s\S]*?)<\/name>\s*<\/author>/ig;
+    let match;
+    while ((match = authorRe.exec(entryText))) {
+      authors.push(this.decodeXMLText(match[1]));
+    }
+    return this.metadataCandidate("arxiv", { id: idUrl }, {
+      itemType: "preprint",
+      title: this.metadataTextContent(entryText, "title"),
+      creators: this.metadataCreatorsFromNames(authors),
+      date: this.metadataTextContent(entryText, "published").slice(0, 10),
+      url: idUrl,
+      abstractNote: this.metadataTextContent(entryText, "summary")
+    }, [idUrl], id ? { arXiv: id } : {});
+  },
+
+  candidateFromPubMedSummary(row) {
+    const articleIds = Array.isArray(row.articleids) ? row.articleids : [];
+    const doi = this.cleanDOI((articleIds.find((id) => id.idtype === "doi") || {}).value || "");
+    const pmid = String(row.uid || row.articleid || "").trim();
+    const authors = (row.authors || []).map((a) => a.name).filter(Boolean);
+    return this.metadataCandidate("pubmed", Object.assign({}, row, { pmid }), {
+      itemType: "journalArticle",
+      title: row.title || "",
+      creators: this.metadataCreatorsFromNames(authors),
+      date: row.pubdate || "",
+      DOI: doi,
+      publicationTitle: row.fulljournalname || row.source || "",
+      volume: row.volume || "",
+      issue: row.issue || "",
+      pages: row.pages || "",
+      url: pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : "",
+      abstractNote: ""
+    }, [pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : "", doi ? `https://doi.org/${doi}` : ""], Object.assign({}, doi ? { DOI: doi } : {}, pmid ? { PMID: pmid } : {}));
+  },
+
+  async lookupCrossrefCandidates(ctx, budget) {
+    const out = [];
+    const doi = ctx.identifiers.dois[0] || "";
+    if (doi && budget.take()) {
+      const res = await this.metadataFetchJSON(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, "crossref");
+      if (res.ok && res.json && res.json.message) {
+        out.push(this.candidateFromCrossref(res.json.message));
+      }
+    }
+    const query = this.metadataQuery(ctx);
+    if (query && budget.take()) {
+      const url = `https://api.crossref.org/works?rows=3&query.bibliographic=${encodeURIComponent(query)}`;
+      const res = await this.metadataFetchJSON(url, "crossref");
+      const items = res.ok && res.json && res.json.message && Array.isArray(res.json.message.items) ? res.json.message.items : [];
+      out.push(...items.map((row) => this.candidateFromCrossref(row)));
+    }
+    return out;
+  },
+
+  async lookupDataCiteCandidates(ctx, budget) {
+    const out = [];
+    const doi = ctx.identifiers.dois[0] || "";
+    if (doi && budget.take()) {
+      const res = await this.metadataFetchJSON(`https://api.datacite.org/dois/${encodeURIComponent(doi)}`, "datacite");
+      if (res.ok && res.json && res.json.data) {
+        out.push(this.candidateFromDataCite(res.json.data));
+      }
+    }
+    const query = this.metadataQuery(ctx);
+    if (query && budget.take()) {
+      const res = await this.metadataFetchJSON(`https://api.datacite.org/dois?query=${encodeURIComponent(query)}&page[size]=3`, "datacite");
+      const rows = res.ok && res.json && Array.isArray(res.json.data) ? res.json.data : [];
+      out.push(...rows.map((row) => this.candidateFromDataCite(row)));
+    }
+    return out;
+  },
+
+  async lookupOpenAlexCandidates(ctx, budget) {
+    const out = [];
+    const doi = ctx.identifiers.dois[0] || "";
+    if (doi && budget.take()) {
+      const res = await this.metadataFetchJSON(`https://api.openalex.org/works/https://doi.org/${encodeURIComponent(doi)}`, "openalex");
+      if (res.ok && res.json) {
+        out.push(this.candidateFromOpenAlex(res.json));
+      }
+    }
+    const query = this.metadataQuery(ctx);
+    if (query && budget.take()) {
+      const res = await this.metadataFetchJSON(`https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=3`, "openalex");
+      const rows = res.ok && res.json && Array.isArray(res.json.results) ? res.json.results : [];
+      out.push(...rows.map((row) => this.candidateFromOpenAlex(row)));
+    }
+    return out;
+  },
+
+  async lookupBookCandidates(ctx, budget) {
+    const out = [];
+    const isbn = ctx.identifiers.isbns[0] || "";
+    const query = this.metadataQuery(ctx);
+    if ((isbn || query) && budget.take()) {
+      const url = isbn
+        ? `https://openlibrary.org/search.json?isbn=${encodeURIComponent(isbn)}&limit=3`
+        : `https://openlibrary.org/search.json?title=${encodeURIComponent(ctx.title || query)}&author=${encodeURIComponent(ctx.creatorsText || "")}&limit=3`;
+      const res = await this.metadataFetchJSON(url, "openlibrary");
+      const rows = res.ok && res.json && Array.isArray(res.json.docs) ? res.json.docs : [];
+      out.push(...rows.map((row) => this.candidateFromOpenLibrary(row)));
+    }
+    if ((isbn || query) && budget.take()) {
+      const q = isbn ? `isbn:${isbn}` : [ctx.title ? `intitle:${ctx.title}` : query, ctx.creatorsText ? `inauthor:${ctx.creatorsText.split(";")[0]}` : ""].filter(Boolean).join(" ");
+      const res = await this.metadataFetchJSON(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=3`, "googlebooks");
+      const rows = res.ok && res.json && Array.isArray(res.json.items) ? res.json.items : [];
+      out.push(...rows.map((row) => this.candidateFromGoogleBook(row)));
+    }
+    return out;
+  },
+
+  async lookupArxivCandidates(ctx, budget) {
+    const out = [];
+    const arxivID = ctx.identifiers.arxiv[0] || "";
+    const query = this.metadataQuery(ctx);
+    if ((arxivID || query) && budget.take()) {
+      const url = arxivID
+        ? `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivID)}&max_results=3`
+        : `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(`ti:"${ctx.title || query}"`)}&max_results=3`;
+      const res = await this.metadataFetchText(url, "arxiv", "application/atom+xml,application/xml,text/xml,*/*");
+      const entries = res.ok ? String(res.text || "").match(/<entry>[\s\S]*?<\/entry>/g) || [] : [];
+      out.push(...entries.slice(0, 3).map((entry) => this.candidateFromArxivEntry(entry)));
+    }
+    return out;
+  },
+
+  async lookupSemanticScholarCandidates(ctx, config, budget) {
+    if (!config.semanticScholarEnabled) {
+      return [];
+    }
+    const headers = config.semanticScholarApiKey ? { "x-api-key": config.semanticScholarApiKey } : {};
+    const out = [];
+    const doi = ctx.identifiers.dois[0] || "";
+    const arxivID = ctx.identifiers.arxiv[0] || "";
+    const pmid = ctx.identifiers.pmids[0] || "";
+    const paperID = doi ? `DOI:${doi}` : arxivID ? `ARXIV:${arxivID}` : pmid ? `PMID:${pmid}` : "";
+    const fields = "title,year,authors,abstract,venue,journal,url,externalIds";
+    if (paperID && budget.take()) {
+      const res = await this.metadataFetchJSON(`https://api.semanticscholar.org/graph/v1/paper/${encodeURIComponent(paperID)}?fields=${encodeURIComponent(fields)}`, "semantic_scholar", headers);
+      if (res.ok && res.json) {
+        out.push(this.candidateFromSemanticScholar(res.json));
+      }
+    }
+    const query = this.metadataQuery(ctx);
+    if (query && budget.take()) {
+      const res = await this.metadataFetchJSON(`https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=3&fields=${encodeURIComponent(fields)}`, "semantic_scholar", headers);
+      const rows = res.ok && res.json && Array.isArray(res.json.data) ? res.json.data : [];
+      out.push(...rows.map((row) => this.candidateFromSemanticScholar(row)));
+    }
+    return out;
+  },
+
+  pubMedBaseParams(config) {
+    const params = new URLSearchParams({ tool: "zotero-assistant", retmode: "json" });
+    if (config.pubMedEmail) {
+      params.set("email", config.pubMedEmail);
+    }
+    if (config.pubMedApiKey) {
+      params.set("api_key", config.pubMedApiKey);
+    }
+    return params;
+  },
+
+  async lookupPubMedCandidates(ctx, config, budget) {
+    if (!config.pubMedEnabled) {
+      return [];
+    }
+    const ids = [];
+    const pmid = ctx.identifiers.pmids[0] || "";
+    const doi = ctx.identifiers.dois[0] || "";
+    if (pmid) {
+      ids.push(pmid);
+    } else if ((doi || ctx.title) && budget.take()) {
+      const params = this.pubMedBaseParams(config);
+      params.set("db", "pubmed");
+      params.set("retmax", "3");
+      params.set("term", doi ? `${doi}[doi]` : `${ctx.title}[title]`);
+      const res = await this.metadataFetchJSON(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?${params.toString()}`, "pubmed");
+      const found = res.ok && res.json && res.json.esearchresult && Array.isArray(res.json.esearchresult.idlist)
+        ? res.json.esearchresult.idlist
+        : [];
+      ids.push(...found);
+    }
+    if (!ids.length || !budget.take()) {
+      return [];
+    }
+    const params = this.pubMedBaseParams(config);
+    params.set("db", "pubmed");
+    params.set("id", ids.slice(0, 3).join(","));
+    const res = await this.metadataFetchJSON(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?${params.toString()}`, "pubmed");
+    const result = res.ok && res.json && res.json.result || {};
+    return ids.slice(0, 3).map((id) => result[id]).filter(Boolean).map((row) => this.candidateFromPubMedSummary(row));
+  },
+
+  titleSimilarity(a, b) {
+    const aa = String(a || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ").trim();
+    const bb = String(b || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ").trim();
+    if (!aa || !bb) {
+      return 0;
+    }
+    if (aa === bb) {
+      return 1;
+    }
+    const setA = new Set(aa.split(/\s+/).filter(Boolean));
+    const setB = new Set(bb.split(/\s+/).filter(Boolean));
+    let overlap = 0;
+    for (const token of setA) {
+      if (setB.has(token)) {
+        overlap++;
+      }
+    }
+    return overlap / Math.max(setA.size, setB.size, 1);
+  },
+
+  enrichMetadataCandidate(candidate, ctx) {
+    const metadata = candidate.metadata || {};
+    if (ctx && ctx.adhoc) {
+      const candidateIdentifiers = Object.assign({}, candidate.matchedIdentifiers || {});
+      const matched = {};
+      if (metadata.DOI && ctx.identifiers.dois.some((doi) => this.cleanDOI(doi).toLowerCase() === this.cleanDOI(metadata.DOI).toLowerCase())) {
+        matched.DOI = this.cleanDOI(metadata.DOI);
+      }
+      if (metadata.ISBN && ctx.identifiers.isbns.some((isbn) => this.normalizeISBN(isbn) === this.normalizeISBN(metadata.ISBN))) {
+        matched.ISBN = this.normalizeISBN(metadata.ISBN);
+      }
+      if (candidateIdentifiers.arXiv && ctx.identifiers.arxiv.some((id) => this.normalizeArxivID(id) === this.normalizeArxivID(candidateIdentifiers.arXiv))) {
+        matched.arXiv = candidateIdentifiers.arXiv;
+      }
+      if (candidateIdentifiers.PMID && ctx.identifiers.pmids.some((id) => String(id) === String(candidateIdentifiers.PMID))) {
+        matched.PMID = String(candidateIdentifiers.PMID);
+      }
+      const strongMatch = !!(matched.DOI || matched.ISBN || matched.arXiv || matched.PMID);
+      const similarity = this.titleSimilarity(ctx.title, metadata.title);
+      const confidence = strongMatch ? "high" : similarity >= 0.78 ? "medium" : "low";
+      const creators = Array.isArray(metadata.creators) ? metadata.creators : candidate.creators || [];
+      return Object.assign({}, candidate, {
+        confidence,
+        score: strongMatch ? 100 : Math.round(similarity * 80),
+        titleSimilarity: similarity,
+        matchedIdentifiers: matched,
+        conflicts: [],
+        suggestedFields: metadata,
+        suggestedCreators: creators,
+        noteSuggestion: this.metadataNoteSuggestion(candidate, confidence, []),
+        attachmentTitleSuggestion: "",
+        targetHint: ""
+      });
+    }
+    const existing = ctx.existing.fields || {};
+    const conflicts = [];
+    const suggestedFields = {};
+    const candidateIdentifiers = Object.assign({}, candidate.matchedIdentifiers || {});
+    const matched = {};
+    if (metadata.DOI && ctx.identifiers.dois.some((doi) => this.cleanDOI(doi).toLowerCase() === this.cleanDOI(metadata.DOI).toLowerCase())) {
+      matched.DOI = this.cleanDOI(metadata.DOI);
+    }
+    if (metadata.ISBN && ctx.identifiers.isbns.some((isbn) => this.normalizeISBN(isbn) === this.normalizeISBN(metadata.ISBN))) {
+      matched.ISBN = this.normalizeISBN(metadata.ISBN);
+    }
+    if (candidateIdentifiers.arXiv && ctx.identifiers.arxiv.some((id) => this.normalizeArxivID(id) === this.normalizeArxivID(candidateIdentifiers.arXiv))) {
+      matched.arXiv = candidateIdentifiers.arXiv;
+    }
+    if (candidateIdentifiers.PMID && ctx.identifiers.pmids.some((id) => String(id) === String(candidateIdentifiers.PMID))) {
+      matched.PMID = String(candidateIdentifiers.PMID);
+    }
+    const strongMatch = !!(matched.DOI || matched.ISBN || matched.arXiv || matched.PMID);
+    const similarity = this.titleSimilarity(ctx.title, metadata.title);
+    const confidence = strongMatch ? "high" : similarity >= 0.78 ? "medium" : "low";
+    const canSuggestOverwrite = strongMatch;
+    for (const [field, value] of Object.entries(metadata)) {
+      if (field === "creators" || value === undefined || value === null || value === "") {
+        continue;
+      }
+      const next = String(value).trim();
+      if (!next) {
+        continue;
+      }
+      const current = String(existing[field] || "").trim();
+      if (!current) {
+        suggestedFields[field] = next;
+      } else if (current.toLowerCase() !== next.toLowerCase()) {
+        conflicts.push({ field, current, candidate: next, highConfidenceOverwriteAllowed: canSuggestOverwrite });
+        if (canSuggestOverwrite) {
+          suggestedFields[field] = next;
+        }
+      }
+    }
+    const creators = Array.isArray(metadata.creators) ? metadata.creators : candidate.creators || [];
+    return Object.assign({}, candidate, {
+      confidence,
+      score: strongMatch ? 100 : Math.round(similarity * 80),
+      titleSimilarity: similarity,
+      matchedIdentifiers: matched,
+      conflicts,
+      suggestedFields,
+      suggestedCreators: creators,
+      noteSuggestion: this.metadataNoteSuggestion(candidate, confidence, conflicts),
+      attachmentTitleSuggestion: metadata.title ? String(metadata.title).slice(0, 180) : "",
+      targetHint: ctx.isTopLevelAttachment
+        ? "top_level_attachment_create_parent_candidate"
+        : "regular_item_update_candidate"
+    });
+  },
+
+  metadataNoteSuggestion(candidate, confidence, conflicts) {
+    const lines = [
+      `<p><strong>Online metadata candidate (${candidate.source}, ${confidence})</strong></p>`,
+      candidate.metadata && candidate.metadata.title ? `<p>${this.escapeHTML(candidate.metadata.title)}</p>` : "",
+      candidate.evidenceLinks && candidate.evidenceLinks.length
+        ? `<ul>${candidate.evidenceLinks.slice(0, 5).map((url) => `<li><a href="${this.escapeHTML(url)}">${this.escapeHTML(url)}</a></li>`).join("")}</ul>`
+        : "",
+      conflicts && conflicts.length ? `<p>Conflicts: ${this.escapeHTML(conflicts.map((c) => c.field).join(", "))}</p>` : ""
+    ];
+    return lines.filter(Boolean).join("");
+  },
+
+  escapeHTML(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  },
+
+  dedupeMetadataCandidates(candidates) {
+    const seen = new Set();
+    const out = [];
+    for (const candidate of candidates) {
+      const meta = candidate.metadata || {};
+      const key = [
+        this.cleanDOI(meta.DOI || ""),
+        this.normalizeISBN(meta.ISBN || ""),
+        String(meta.title || "").toLowerCase().replace(/\s+/g, " ").trim(),
+        String(meta.date || "").slice(0, 4)
+      ].filter(Boolean).join("|");
+      if (key && seen.has(key)) {
+        continue;
+      }
+      if (key) {
+        seen.add(key);
+      }
+      out.push(candidate);
+    }
+    return out;
+  },
+
+  async lookupCandidatesForContext(ctx, config, options = {}) {
+    const maxCandidates = Number.isInteger(options.maxCandidates) && options.maxCandidates > 0
+      ? options.maxCandidates
+      : MAX_METADATA_CANDIDATES_PER_ITEM;
+    let requestCount = 0;
+    const budget = {
+      take: () => {
+        if (requestCount >= MAX_METADATA_SOURCE_REQUESTS_PER_ITEM) {
+          return false;
+        }
+        requestCount++;
+        return true;
+      }
+    };
+    const batches = await Promise.all([
+      this.lookupCrossrefCandidates(ctx, budget),
+      this.lookupDataCiteCandidates(ctx, budget),
+      this.lookupOpenAlexCandidates(ctx, budget),
+      this.lookupBookCandidates(ctx, budget),
+      this.lookupArxivCandidates(ctx, budget),
+      this.lookupSemanticScholarCandidates(ctx, config, budget),
+      this.lookupPubMedCandidates(ctx, config, budget)
+    ]);
+    const enriched = this.dedupeMetadataCandidates([].concat(...batches))
+      .map((candidate) => this.enrichMetadataCandidate(candidate, ctx))
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
+    return {
+      requestCount,
+      candidates: enriched.slice(0, maxCandidates)
+    };
+  },
+
+  metadataNeedsTextProbe(ctx) {
+    if (!ctx) {
+      return false;
+    }
+    if ((ctx.identifiers.dois && ctx.identifiers.dois.length) || (ctx.identifiers.isbns && ctx.identifiers.isbns.length)) {
+      return false;
+    }
+    return !ctx.title || ctx.title.length < 18 || ctx.isAttachment;
+  },
+
+  async toolLookupMetadataCandidates(args) {
+    if (!this.task) {
+      return { ok: false, error: "没有活动任务。" };
+    }
+    const keys = Array.isArray(args.itemKeys) ? args.itemKeys.map((key) => String(key || "").trim()).filter(Boolean) : [];
+    const query = String(args.query || "").trim();
+    if (!keys.length && query.length < 2) {
+      return { ok: false, error: "lookup_metadata_candidates 需要 itemKeys（库内条目）或 query（至少 2 个字符的文献检索）。" };
+    }
+    if (keys.length > MAX_METADATA_LOOKUP_ITEMS) {
+      return { ok: false, error: `单次最多查询 ${MAX_METADATA_LOOKUP_ITEMS} 个条目，本次请求 ${keys.length} 个。` };
+    }
+    const quotaUnits = keys.length > 0 ? keys.length : 1;
+    const quota = this.metadataEnsureRoundBudget(quotaUnits);
+    if (!quota.ok) {
+      return quota;
+    }
+    const useTextProbe = args.useTextProbe !== false;
+    const config = this.metadataSourceConfig();
+    this.task.metadataLookupCache = this.task.metadataLookupCache || {};
+
+    if (!keys.length) {
+      const ctx = this.metadataLookupContextFromQuery(args);
+      const cacheKey = this.metadataCacheKey(ctx, false, config);
+      if (this.task.metadataLookupCache[cacheKey]) {
+        const cached = Object.assign({ cacheHit: true }, this.task.metadataLookupCache[cacheKey]);
+        this.task.roundMetadataLookupCount = (this.task.roundMetadataLookupCount || 0) + 1;
+        this.task.metadataLookupCount = (this.task.metadataLookupCount || 0) + 1;
+        return {
+          ok: true,
+          mode: "adhoc_search",
+          count: 1,
+          maxCandidates: MAX_METADATA_ADHOC_CANDIDATES,
+          results: [cached]
+        };
+      }
+      const lookup = await this.lookupCandidatesForContext(ctx, config, { maxCandidates: MAX_METADATA_ADHOC_CANDIDATES });
+      const result = {
+        ok: true,
+        mode: "adhoc_search",
+        query,
+        hints: args.hints && typeof args.hints === "object" ? args.hints : {},
+        querySignals: {
+          title: ctx.title,
+          creators: ctx.creatorsText,
+          year: ctx.year,
+          identifiers: ctx.identifiers
+        },
+        sourceConfig: {
+          defaultSources: ["crossref", "datacite", "openalex", "arxiv", "openlibrary", "googlebooks"],
+          semanticScholarEnabled: !!config.semanticScholarEnabled,
+          pubMedEnabled: !!config.pubMedEnabled
+        },
+        sourceRequestCount: lookup.requestCount,
+        candidates: lookup.candidates,
+        instruction:
+          "Read-only bibliographic search: no Zotero item is bound. Summarize candidates for the user; to add to Zotero, the user must create or select an item first, then use write tools with chosen metadata."
+      };
+      this.task.metadataLookupCache[cacheKey] = result;
+      this.task.roundMetadataLookupCount = (this.task.roundMetadataLookupCount || 0) + 1;
+      this.task.metadataLookupCount = (this.task.metadataLookupCount || 0) + 1;
+      this.log("metadata.lookup", {
+        mode: "adhoc_search",
+        query,
+        semanticScholarEnabled: !!config.semanticScholarEnabled,
+        pubMedEnabled: !!config.pubMedEnabled,
+        candidateCount: lookup.candidates.length
+      });
+      return {
+        ok: true,
+        mode: "adhoc_search",
+        count: 1,
+        maxCandidates: MAX_METADATA_ADHOC_CANDIDATES,
+        results: [result]
+      };
+    }
+
+    const results = [];
+    for (const key of keys) {
+      const item = await this.getItemByKey(key);
+      if (!item) {
+        results.push({ itemKey: key, ok: false, error: "找不到条目。" });
+        continue;
+      }
+      let baseCtx = this.metadataLookupContext(item, null);
+      let textProbe = { used: false };
+      if (useTextProbe && this.metadataNeedsTextProbe(baseCtx)) {
+        textProbe = await this.metadataTextProbe(item);
+      }
+      const ctx = this.metadataLookupContext(item, textProbe);
+      const cacheKey = this.metadataCacheKey(ctx, useTextProbe, config);
+      if (this.task.metadataLookupCache[cacheKey]) {
+        results.push(Object.assign({ cacheHit: true }, this.task.metadataLookupCache[cacheKey]));
+        continue;
+      }
+      const lookup = await this.lookupCandidatesForContext(ctx, config);
+      const result = {
+        ok: true,
+        itemKey: key,
+        target: {
+          itemType: ctx.existing.itemType,
+          isAttachment: ctx.isAttachment,
+          isTopLevelAttachment: ctx.isTopLevelAttachment,
+          attachmentKey: ctx.attachmentKey,
+          attachmentFilename: ctx.attachmentFilename,
+          attachmentKind: ctx.attachmentKind,
+          contentType: ctx.contentType
+        },
+        querySignals: {
+          title: ctx.title,
+          creators: ctx.creatorsText,
+          year: ctx.year,
+          identifiers: ctx.identifiers,
+          textProbe: ctx.textProbe
+        },
+        sourceConfig: {
+          defaultSources: ["crossref", "datacite", "openalex", "arxiv", "openlibrary", "googlebooks"],
+          semanticScholarEnabled: !!config.semanticScholarEnabled,
+          pubMedEnabled: !!config.pubMedEnabled
+        },
+        sourceRequestCount: lookup.requestCount,
+        candidates: lookup.candidates,
+        instruction:
+          "Use high-confidence candidates with exact DOI/ISBN/arXiv/PMID matches to propose Zotero write tools. If confidence is low or candidates are close, ask the user to choose before writing."
+      };
+      this.task.metadataLookupCache[cacheKey] = result;
+      results.push(result);
+    }
+    this.task.roundMetadataLookupCount = (this.task.roundMetadataLookupCount || 0) + keys.length;
+    this.task.metadataLookupCount = (this.task.metadataLookupCount || 0) + keys.length;
+    this.log("metadata.lookup", {
+      itemCount: keys.length,
+      useTextProbe,
+      semanticScholarEnabled: !!config.semanticScholarEnabled,
+      pubMedEnabled: !!config.pubMedEnabled,
+      resultCount: results.length
+    });
+    return {
+      ok: true,
+      count: results.length,
+      maxCandidatesPerItem: MAX_METADATA_CANDIDATES_PER_ITEM,
+      results
     };
   },
 

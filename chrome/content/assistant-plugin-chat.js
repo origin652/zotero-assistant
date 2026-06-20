@@ -1726,6 +1726,7 @@ var ZoteroAssistantPluginChat = (() => {
       loopCount: 0,
       roundLiveSearchCount: 0,
       roundWebFetchCount: 0,
+      roundMetadataLookupCount: 0,
       roundCreatedCollections: 0,
       roundProcessedItems: new Set(),
       processedItems: new Set(),
@@ -1733,6 +1734,8 @@ var ZoteroAssistantPluginChat = (() => {
       executedWriteToolCount: 0,
       liveSearchCount: 0,
       webFetchCount: 0,
+      metadataLookupCount: 0,
+      metadataLookupCache: {},
       plainAssistantTurnCount: 0,
       userFacingMessageCount: 0,
       lastToolFailure: null,
@@ -1942,6 +1945,7 @@ var ZoteroAssistantPluginChat = (() => {
       read_fulltext_page: "读取全文",
       live_search: "联网搜索",
       web_fetch: "抓取网页",
+      lookup_metadata_candidates: "联网查元数据",
       create_collection: "创建分类",
       add_tags: "添加标签",
       create_note: "创建笔记",
@@ -1969,6 +1973,10 @@ var ZoteroAssistantPluginChat = (() => {
       detail = `${separator}${args.query}`;
     } else if (name === "web_fetch" && args.url) {
       detail = `${separator}${String(args.url).slice(0, 60)}`;
+    } else if (name === "lookup_metadata_candidates" && String(args.query || "").trim()) {
+      detail = `${separator}${String(args.query).slice(0, 60)}`;
+    } else if (name === "lookup_metadata_candidates" && Array.isArray(args.itemKeys)) {
+      detail = `${separator}${args.itemKeys.length} ${this.isEnglishUI() ? "items" : "条"}`;
     } else if (name === "create_collection" && args.name) {
       detail = `${separator}${args.name}`;
     }

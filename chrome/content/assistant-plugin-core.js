@@ -161,6 +161,11 @@ var ZoteroAssistantPluginCore = (() => {
     this.setDefault(PREFS.eventLog, "[]");
     this.setDefault(PREFS.braveSearchApiKey, "");
     this.setDefault(PREFS.webSearchProvider, "auto");
+    this.setDefault(PREFS.metadataSemanticScholarEnabled, false);
+    this.setDefault(PREFS.metadataSemanticScholarApiKey, "");
+    this.setDefault(PREFS.metadataPubMedEnabled, false);
+    this.setDefault(PREFS.metadataPubMedApiKey, "");
+    this.setDefault(PREFS.metadataPubMedEmail, "");
     this.setDefault(PREFS.selectionAskShortcut, DEFAULT_SELECTION_ASK_SHORTCUT);
     this.setDefault(PREFS.sessionMemoryEnabled, DEFAULT_SESSION_MEMORY_ENABLED);
     this.setDefault(PREFS.autoCompressionEnabled, DEFAULT_AUTO_COMPRESSION_ENABLED);

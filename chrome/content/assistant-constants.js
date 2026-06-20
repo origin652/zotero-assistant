@@ -14,6 +14,11 @@ var ZoteroAssistantConstants = (() => {
     eventLog: PREF_PREFIX + "eventLog",
     braveSearchApiKey: PREF_PREFIX + "braveSearchApiKey",
     webSearchProvider: PREF_PREFIX + "webSearchProvider",
+    metadataSemanticScholarEnabled: PREF_PREFIX + "metadataSemanticScholarEnabled",
+    metadataSemanticScholarApiKey: PREF_PREFIX + "metadataSemanticScholarApiKey",
+    metadataPubMedEnabled: PREF_PREFIX + "metadataPubMedEnabled",
+    metadataPubMedApiKey: PREF_PREFIX + "metadataPubMedApiKey",
+    metadataPubMedEmail: PREF_PREFIX + "metadataPubMedEmail",
     uiLanguage: PREF_PREFIX + "uiLanguage",
     selectionAskShortcut: PREF_PREFIX + "selectionAskShortcut",
     sessionMemoryEnabled: PREF_PREFIX + "sessionMemoryEnabled",
@@ -78,6 +83,12 @@ var ZoteroAssistantConstants = (() => {
   const WEB_FETCH_TIMEOUT_MS = 30000;
   const WEB_FETCH_MAX_BYTES = 512000;
   const WEB_FETCH_MAX_CHARS = 60000;
+  const MAX_METADATA_LOOKUP_ITEMS = 5;
+  const MAX_METADATA_LOOKUP_PER_MODEL_ROUND = 5;
+  const MAX_METADATA_CANDIDATES_PER_ITEM = 3;
+  const MAX_METADATA_ADHOC_CANDIDATES = 10;
+  const MAX_METADATA_SOURCE_REQUESTS_PER_ITEM = 14;
+  const METADATA_TEXT_PROBE_CHARS = 8000;
   const MAX_EXPORT_ITEMS = 50;
   const MAX_EXPORT_PER_MODEL_ROUND = 4;
   const MAX_EXPORT_TEXT_CHARS = 60000;
@@ -122,6 +133,7 @@ var ZoteroAssistantConstants = (() => {
     "open_zotero_preferences",
     "live_search",
     "web_fetch",
+    "lookup_metadata_candidates",
     "list_export_formats"
   ]);
 
@@ -322,6 +334,47 @@ var ZoteroAssistantConstants = (() => {
             }
           },
           required: ["url", "prompt"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "lookup_metadata_candidates",
+        description: "Look up bibliographic metadata from authoritative public sources (Crossref, OpenAlex, arXiv, Open Library, Google Books, etc.). Read-only; never writes to Zotero. Use itemKeys for existing Zotero items or attachments (optionally with useTextProbe). Use query (+ optional hints) when the user has no library item yet — e.g. title, DOI, arXiv, ISBN, or author+year. Do not use for local library search (use search_items) or non-bibliographic web pages (use live_search). For low-confidence or multiple close candidates, ask the user before write tools.",
+        parameters: {
+          type: "object",
+          properties: {
+            itemKeys: {
+              type: "array",
+              items: { type: "string" },
+              description: "Zotero item or attachment keys to look up. Max 5. Omit when using query."
+            },
+            query: {
+              type: "string",
+              description: "Free-text bibliographic search (min 2 characters): title, authors, DOI, arXiv ID, ISBN, PMID, or mixed. Use when there is no itemKey yet."
+            },
+            hints: {
+              type: "object",
+              description: "Optional structured hints to improve adhoc query matching.",
+              properties: {
+                creators: { type: "string", description: "Author names, semicolon-separated if multiple." },
+                year: { type: "string", description: "Publication year." },
+                doi: { type: "string" },
+                isbn: { type: "string" },
+                arxiv: { type: "string" },
+                pmid: { type: "string" }
+              }
+            },
+            useTextProbe: {
+              type: "boolean",
+              description: "Item mode only: read a small PDF/EPUB/full-text snippet for identifiers when fields are insufficient. Defaults to true. Ignored for query-only lookups."
+            },
+            reason: {
+              type: "string",
+              description: "Why online metadata lookup is needed, especially if useTextProbe may read local document text."
+            }
+          }
         }
       }
     },
@@ -673,6 +726,6 @@ var ZoteroAssistantConstants = (() => {
   ];
 
   return {
-    HTML_NS, PREF_PREFIX, PREFS, DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_AUDIT_MODEL, DEFAULT_API_MODE, DEFAULT_SAFETY_MODE, DEFAULT_UI_LANGUAGE, DEFAULT_SELECTION_ASK_SHORTCUT, DEFAULT_SESSION_MEMORY_ENABLED, DEFAULT_AUTO_COMPRESSION_ENABLED, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS, DEFAULT_CONTEXT_COMPRESSION_TARGET_CHARS, DEFAULT_CONTEXT_COMPRESSION_KEEP_MESSAGES, DEFAULT_CONTEXT_COMPRESSION_MAX_TOKENS, DEFAULT_CONTEXT_COMPRESSION_TARGET_TOKENS, CHARS_PER_TOKEN_ESTIMATE, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_MESSAGES, CHAT_MINIMIZED_HEIGHT, CHAT_MIN_WIDTH, CHAT_MIN_HEIGHT, CHAT_DEFAULT_WIDTH, CHAT_DEFAULT_HEIGHT, CHAT_DRAWER_WIDTH, CHAT_DRAWER_LOG_PREVIEW, MAX_CHAT_DISPLAY_LOG, MAX_CHAT_DISPLAY_CHARS, COMPRESSED_CONTEXT_MARKER, PREF_PANE_ID, LOG_RETENTION_DAYS, MAX_MODEL_RETRIES, MAX_MODEL_FETCH_MS, AUDIT_FETCH_TIMEOUT_MS, MAX_COLLECTIONS_PER_MODEL_ROUND, MAX_ITEMS_PER_MODEL_ROUND, MAX_CONTEXT_SELECTED_ITEMS, SELECTION_ASK_MAX_CHARS, MAX_TASK_LOOPS, DEFAULT_BROWSE_PAGE_SIZE, MAX_BROWSE_PAGE_SIZE, FULLTEXT_PAGE_CHARS, READER_PAGE_CHARS, READER_NEIGHBOR_PAGE_RADIUS, NOTE_PREVIEW_LENGTH, ABSTRACT_PREVIEW_LENGTH, MAX_OVERVIEW_TAGS, MAX_OVERVIEW_COLLECTIONS, MAX_LIVE_SEARCH_PER_MODEL_ROUND, LEGACY_WEB_SEARCH_TOOL, LIVE_SEARCH_TOOL, MAX_WEB_FETCH_PER_MODEL_ROUND, MAX_WEB_SEARCH_RESULTS, WEB_FETCH_TIMEOUT_MS, WEB_FETCH_MAX_BYTES, WEB_FETCH_MAX_CHARS, MAX_EXPORT_ITEMS, MAX_EXPORT_PER_MODEL_ROUND, MAX_EXPORT_TEXT_CHARS, MAX_BATCH_STEPS, MAX_BATCH_TOTAL_ITEMS, BATCH_ALLOWED_TOOLS, DEBUG_TEXT_LIMIT, DEBUG_MESSAGE_LIMIT, DEBUG_MESSAGE_TAIL, COMPRESSION_MESSAGE_SERIALIZE_LIMIT, MEMORY_MESSAGE_SERIALIZE_LIMIT, MEMORY_RECENT_MESSAGE_LIMIT, DEFAULT_PREF_PAGE_SIZE, MAX_PREF_PAGE_SIZE, WEB_SEARCH_USER_AGENT, INDEX_NOTIFIER_TYPES, SESSION_GRANT_TOOL, REQUEST_READ_APPROVAL_TOOL, SENSITIVE_READ_TOOLS, READ_TOOLS, LOW_RISK_WRITE_TOOLS, HIGH_RISK_WRITE_TOOLS, TOOL_DEFINITIONS
+    HTML_NS, PREF_PREFIX, PREFS, DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_AUDIT_MODEL, DEFAULT_API_MODE, DEFAULT_SAFETY_MODE, DEFAULT_UI_LANGUAGE, DEFAULT_SELECTION_ASK_SHORTCUT, DEFAULT_SESSION_MEMORY_ENABLED, DEFAULT_AUTO_COMPRESSION_ENABLED, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_CHARS, DEFAULT_CONTEXT_COMPRESSION_TARGET_CHARS, DEFAULT_CONTEXT_COMPRESSION_KEEP_MESSAGES, DEFAULT_CONTEXT_COMPRESSION_MAX_TOKENS, DEFAULT_CONTEXT_COMPRESSION_TARGET_TOKENS, CHARS_PER_TOKEN_ESTIMATE, DEFAULT_CONTEXT_COMPRESSION_TRIGGER_MESSAGES, CHAT_MINIMIZED_HEIGHT, CHAT_MIN_WIDTH, CHAT_MIN_HEIGHT, CHAT_DEFAULT_WIDTH, CHAT_DEFAULT_HEIGHT, CHAT_DRAWER_WIDTH, CHAT_DRAWER_LOG_PREVIEW, MAX_CHAT_DISPLAY_LOG, MAX_CHAT_DISPLAY_CHARS, COMPRESSED_CONTEXT_MARKER, PREF_PANE_ID, LOG_RETENTION_DAYS, MAX_MODEL_RETRIES, MAX_MODEL_FETCH_MS, AUDIT_FETCH_TIMEOUT_MS, MAX_COLLECTIONS_PER_MODEL_ROUND, MAX_ITEMS_PER_MODEL_ROUND, MAX_CONTEXT_SELECTED_ITEMS, SELECTION_ASK_MAX_CHARS, MAX_TASK_LOOPS, DEFAULT_BROWSE_PAGE_SIZE, MAX_BROWSE_PAGE_SIZE, FULLTEXT_PAGE_CHARS, READER_PAGE_CHARS, READER_NEIGHBOR_PAGE_RADIUS, NOTE_PREVIEW_LENGTH, ABSTRACT_PREVIEW_LENGTH, MAX_OVERVIEW_TAGS, MAX_OVERVIEW_COLLECTIONS, MAX_LIVE_SEARCH_PER_MODEL_ROUND, LEGACY_WEB_SEARCH_TOOL, LIVE_SEARCH_TOOL, MAX_WEB_FETCH_PER_MODEL_ROUND, MAX_WEB_SEARCH_RESULTS, WEB_FETCH_TIMEOUT_MS, WEB_FETCH_MAX_BYTES, WEB_FETCH_MAX_CHARS, MAX_METADATA_LOOKUP_ITEMS, MAX_METADATA_LOOKUP_PER_MODEL_ROUND, MAX_METADATA_CANDIDATES_PER_ITEM, MAX_METADATA_ADHOC_CANDIDATES, MAX_METADATA_SOURCE_REQUESTS_PER_ITEM, METADATA_TEXT_PROBE_CHARS, MAX_EXPORT_ITEMS, MAX_EXPORT_PER_MODEL_ROUND, MAX_EXPORT_TEXT_CHARS, MAX_BATCH_STEPS, MAX_BATCH_TOTAL_ITEMS, BATCH_ALLOWED_TOOLS, DEBUG_TEXT_LIMIT, DEBUG_MESSAGE_LIMIT, DEBUG_MESSAGE_TAIL, COMPRESSION_MESSAGE_SERIALIZE_LIMIT, MEMORY_MESSAGE_SERIALIZE_LIMIT, MEMORY_RECENT_MESSAGE_LIMIT, DEFAULT_PREF_PAGE_SIZE, MAX_PREF_PAGE_SIZE, WEB_SEARCH_USER_AGENT, INDEX_NOTIFIER_TYPES, SESSION_GRANT_TOOL, REQUEST_READ_APPROVAL_TOOL, SENSITIVE_READ_TOOLS, READ_TOOLS, LOW_RISK_WRITE_TOOLS, HIGH_RISK_WRITE_TOOLS, TOOL_DEFINITIONS
   };
 })();

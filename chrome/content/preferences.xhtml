@@ -71,6 +71,14 @@
         "Brave Search API Key（可选）": "Brave Search API Key (optional)",
         "助手工具 live_search / web_fetch 会访问公网。Brave key 见": "Assistant tools live_search / web_fetch access the public web. Brave key:",
         "web_fetch 将页面转为 Markdown 供模型阅读（类似 Claude Code WebFetch）。": "web_fetch converts pages to Markdown for the model, similar to Claude Code WebFetch.",
+        "联网元数据源（lookup_metadata_candidates）": "Online metadata sources (lookup_metadata_candidates)",
+        "默认启用 Crossref、DataCite、OpenAlex、arXiv、Open Library、Google Books。下面的专业源默认关闭；启用后会在联网补元数据时一起查询。": "Crossref, DataCite, OpenAlex, arXiv, Open Library, and Google Books are enabled by default. The specialist sources below are disabled by default and are queried only when enabled.",
+        "启用 Semantic Scholar": "Enable Semantic Scholar",
+        "Semantic Scholar API Key（可选）": "Semantic Scholar API Key (optional)",
+        "启用 PubMed / NCBI": "Enable PubMed / NCBI",
+        "PubMed API Key（可选）": "PubMed API Key (optional)",
+        "PubMed Email（可选，NCBI 建议提供）": "PubMed Email (optional; recommended by NCBI)",
+        "工具只返回候选元数据，不直接写入 Zotero。若需要读取 PDF/EPUB 开头片段来生成查询线索，在确认或审核模式下会先请求授权。": "The tool only returns metadata candidates and never writes to Zotero. If it needs to read a leading PDF/EPUB snippet to build query clues, it asks for approval in confirm or review mode.",
         "确认模式": "Confirm mode",
         "AI 审核模式": "AI review mode",
         "完全开放模式": "Open mode",
@@ -333,6 +341,48 @@
         助手工具 live_search / web_fetch 会访问公网。Brave key 见
         <html:a href="https://brave.com/search/api/">Brave Search API</html:a>。
         web_fetch 将页面转为 Markdown 供模型阅读（类似 Claude Code WebFetch）。
+      </html:p>
+    </html:div>
+
+    <html:div class="za-pref-card">
+      <label>联网元数据源（lookup_metadata_candidates）</label>
+      <html:p class="za-pref-note">
+        默认启用 Crossref、DataCite、OpenAlex、arXiv、Open Library、Google Books。下面的专业源默认关闭；启用后会在联网补元数据时一起查询。
+      </html:p>
+
+      <checkbox
+        id="zotero-assistant-pref-metadataSemanticScholarEnabled"
+        label="启用 Semantic Scholar"
+        preference="extensions.zoteroAssistant.metadataSemanticScholarEnabled"
+        native="true"
+      />
+      <label>Semantic Scholar API Key（可选）</label>
+      <html:input
+        id="zotero-assistant-pref-metadataSemanticScholarApiKey"
+        type="password"
+        preference="extensions.zoteroAssistant.metadataSemanticScholarApiKey"
+      />
+
+      <checkbox
+        id="zotero-assistant-pref-metadataPubMedEnabled"
+        label="启用 PubMed / NCBI"
+        preference="extensions.zoteroAssistant.metadataPubMedEnabled"
+        native="true"
+      />
+      <label>PubMed API Key（可选）</label>
+      <html:input
+        id="zotero-assistant-pref-metadataPubMedApiKey"
+        type="password"
+        preference="extensions.zoteroAssistant.metadataPubMedApiKey"
+      />
+      <label>PubMed Email（可选，NCBI 建议提供）</label>
+      <html:input
+        id="zotero-assistant-pref-metadataPubMedEmail"
+        type="email"
+        preference="extensions.zoteroAssistant.metadataPubMedEmail"
+      />
+      <html:p class="za-pref-note">
+        工具只返回候选元数据，不直接写入 Zotero。若需要读取 PDF/EPUB 开头片段来生成查询线索，在确认或审核模式下会先请求授权。
       </html:p>
     </html:div>
 

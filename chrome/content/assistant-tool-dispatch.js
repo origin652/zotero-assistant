@@ -20,6 +20,7 @@ var ZoteroAssistantToolDispatch = (() => {
             "工具已更名为 live_search。请勿调用 web_search，请改用 live_search 并传入相同参数（如 query）。"
         }),
       web_fetch: (ctx, args) => ctx.toolWebFetch(args),
+      lookup_metadata_candidates: (ctx, args) => ctx.toolLookupMetadataCandidates(args),
       create_collection: (ctx, args) => ctx.toolCreateCollection(args),
       add_items_to_collection: (ctx, args) => ctx.toolAddItemsToCollection(args),
       add_tags: (ctx, args) => ctx.toolAddTags(args),

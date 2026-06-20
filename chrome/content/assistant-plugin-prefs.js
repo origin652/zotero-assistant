@@ -233,6 +233,9 @@ var ZoteroAssistantPluginPrefs = (() => {
     }
     if ([
       PREFS.webSearchProvider,
+      PREFS.metadataSemanticScholarEnabled,
+      PREFS.metadataPubMedEnabled,
+      PREFS.metadataPubMedEmail,
       PREFS.uiLanguage,
       PREFS.selectionAskShortcut,
       PREFS.debugMode,
@@ -289,6 +292,12 @@ var ZoteroAssistantPluginPrefs = (() => {
     }
     if (meta.name === PREFS.webSearchProvider && !["auto", "brave", "duckduckgo"].includes(value)) {
       throw new Error("webSearchProvider 只能是 auto、brave 或 duckduckgo。");
+    }
+    if ([PREFS.metadataSemanticScholarEnabled, PREFS.metadataPubMedEnabled].includes(meta.name) && typeof value !== "boolean") {
+      throw new Error("元数据源启用项必须是 true 或 false。");
+    }
+    if (meta.name === PREFS.metadataPubMedEmail && value && typeof value !== "string") {
+      throw new Error("PubMed email 必须是字符串。");
     }
     if (meta.name === PREFS.uiLanguage && !["auto", "zh-CN", "en-US"].includes(value)) {
       throw new Error("uiLanguage 只能是 auto、zh-CN 或 en-US。");
@@ -478,6 +487,11 @@ var ZoteroAssistantPluginPrefs = (() => {
       PREFS.debugOutputDir,
       PREFS.braveSearchApiKey,
       PREFS.webSearchProvider,
+      PREFS.metadataSemanticScholarEnabled,
+      PREFS.metadataSemanticScholarApiKey,
+      PREFS.metadataPubMedEnabled,
+      PREFS.metadataPubMedApiKey,
+      PREFS.metadataPubMedEmail,
       PREFS.uiLanguage,
       PREFS.selectionAskShortcut,
       PREFS.sessionMemoryEnabled,

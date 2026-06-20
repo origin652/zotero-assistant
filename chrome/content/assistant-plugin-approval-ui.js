@@ -579,6 +579,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         request_zotero_restart: `AI requests restarting Zotero. Reason: ${args.reason || unknown}`,
         move_to_trash: `AI requests moving ${args.itemKeys ? args.itemKeys.length : 0} items to trash. Reason: ${args.reason || unknown}`,
         trigger_plugin_command: `AI requests running another plugin command: ${args.commandId || ""}. ${args.summary || ""}`,
+        lookup_metadata_candidates: `AI requests looking up online metadata candidates for ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} items${args.useTextProbe === false ? "" : " and may read a small leading PDF/EPUB text snippet"}. Reason: ${args.reason || unknown}`,
         export_items_citation: `AI requests exporting ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} items as ${args.format || "a citation format"}${String(args.saveToPath || "").trim() ? ` and writing the file to ${args.saveToPath}` : " (chat text only, no file)"}. Reason: ${args.reason || unknown}`,
         run_batch_plan: this.batchApprovalSummary(args, true)
       };
@@ -592,6 +593,7 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       request_zotero_restart: `AI 请求重启 Zotero。原因：${args.reason || "未说明"}`,
       move_to_trash: `AI 请求将 ${args.itemKeys ? args.itemKeys.length : 0} 个条目移到回收站。原因：${args.reason || "未说明"}`,
       trigger_plugin_command: `AI 请求触发其他插件命令：${args.commandId || ""}。${args.summary || ""}`,
+      lookup_metadata_candidates: `AI 请求为 ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} 个条目联网查询元数据候选${args.useTextProbe === false ? "" : "，并可能读取 PDF/EPUB 开头少量文本作为查询线索"}。原因：${args.reason || "未说明"}`,
       export_items_citation: `AI 请求将 ${Array.isArray(args.itemKeys) ? args.itemKeys.length : 0} 个条目导出为 ${args.format || "某种引用格式"}${String(args.saveToPath || "").trim() ? `，并写入文件 ${args.saveToPath}` : "（仅在聊天中返回文本，不写文件）"}。原因：${args.reason || "未说明"}`,
       run_batch_plan: this.batchApprovalSummary(args, false)
     };
@@ -731,6 +733,15 @@ var ZoteroAssistantPluginApprovalUi = (() => {
     if (toolName === "request_zotero_restart") {
       return { required: true, allowed: false };
     }
+    if (toolName === "lookup_metadata_candidates") {
+      const wantsProbe = !(args && args.useTextProbe === false);
+      if (!wantsProbe || mode === "open") {
+        return { required: false, allowed: true };
+      }
+      const rememberKey = this.approvalKey(toolName, args);
+      const remembered = !!this.rememberedApprovals[rememberKey];
+      return { required: true, allowed: remembered };
+    }
     if (READ_TOOLS.has(toolName) || toolName === "request_clarification" || toolName === "finish_task") {
       return { required: false, allowed: true };
     }
@@ -852,6 +863,11 @@ var ZoteroAssistantPluginApprovalUi = (() => {
           return this.truncateText(safeArgs.query || "", 160);
         case "web_fetch":
           return this.truncateText(`${safeArgs.url || ""} - ${safeArgs.prompt || ""}`, 200);
+        case "lookup_metadata_candidates":
+          if (String(safeArgs.query || "").trim()) {
+            return `Lookup metadata (query): ${this.truncateText(safeArgs.query, 160)}`;
+          }
+          return `Lookup metadata candidates: ${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} items${safeArgs.useTextProbe === false ? "" : " with text probe"}`;
         case "list_export_formats":
           return "List available export formats";
         case "export_items_citation":
@@ -918,6 +934,11 @@ var ZoteroAssistantPluginApprovalUi = (() => {
         return this.truncateText(safeArgs.query || "", 160);
       case "web_fetch":
         return this.truncateText(`${safeArgs.url || ""} — ${safeArgs.prompt || ""}`, 200);
+      case "lookup_metadata_candidates":
+        if (String(safeArgs.query || "").trim()) {
+          return `联网查文献候选：${this.truncateText(safeArgs.query, 160)}`;
+        }
+        return `联网查元数据候选：${Array.isArray(safeArgs.itemKeys) ? safeArgs.itemKeys.length : 0} 条${safeArgs.useTextProbe === false ? "" : "（含开头文本探测）"}`;
       case "list_export_formats":
         return "列出可用导出格式";
       case "export_items_citation":
@@ -1268,6 +1289,28 @@ var ZoteroAssistantPluginApprovalUi = (() => {
           reason: args.reason || ""
         }, null, 2),
         approveLabel: this.isEnglishUI() ? "Allow writing this export file" : "允许写入该导出文件",
+        allowRemember: true,
+        rememberKey: this.approvalKey(toolName, args)
+      };
+    }
+    if (toolName === "lookup_metadata_candidates") {
+      const wantsProbe = !(args && args.useTextProbe === false);
+      if (!wantsProbe) {
+        return null;
+      }
+      return {
+        id: callID,
+        kind: "metadata_lookup_text_probe",
+        toolName,
+        args,
+        summary: this.approvalSummary(toolName, args),
+        details: JSON.stringify({
+          itemCount: Array.isArray(args.itemKeys) ? args.itemKeys.length : 0,
+          itemKeys: Array.isArray(args.itemKeys) ? args.itemKeys : [],
+          useTextProbe: args.useTextProbe !== false,
+          reason: args.reason || ""
+        }, null, 2),
+        approveLabel: this.isEnglishUI() ? "Allow metadata lookup text probe" : "允许元数据查询读取开头文本",
         allowRemember: true,
         rememberKey: this.approvalKey(toolName, args)
       };
