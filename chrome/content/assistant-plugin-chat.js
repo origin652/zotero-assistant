@@ -1565,6 +1565,7 @@ var ZoteroAssistantPluginChat = (() => {
         return;
       }
       event.preventDefault();
+      event.stopPropagation();
       state.chatDrawerFollowChat = false;
       const bounds = state.chatDrawerBounds || this.chatDrawerBoundsBesideChat(state);
       state.chatDrawerDragging = {
@@ -1605,6 +1606,7 @@ var ZoteroAssistantPluginChat = (() => {
         return;
       }
       event.preventDefault();
+      event.stopPropagation();
       const bounds = state.chatBounds || this.defaultChatBounds(state);
       state.chatDragging = {
         startX: event.clientX,
