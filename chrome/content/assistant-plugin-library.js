@@ -813,7 +813,7 @@ var ZoteroAssistantPluginLibrary = (() => {
     }
     this.task.roundWebFetchCount = (this.task.roundWebFetchCount || 0) + 1;
     this.task.webFetchCount = (this.task.webFetchCount || 0) + 1;
-    this.log("web.fetch", { url, prompt: this.truncateText(prompt, 120), chars: markdown.length });
+    this.log("web.fetch", { url, prompt: truncateText(prompt, 120), chars: markdown.length });
     return {
       ok: true,
       url,
@@ -1038,7 +1038,8 @@ var ZoteroAssistantPluginLibrary = (() => {
     if (this.task && this.task.lastToolFailure) {
       return {
         ok: false,
-        error: `最近一次工具失败：${this.task.lastToolFailure.toolName} - ${this.task.lastToolFailure.error}`
+        error: `最近一次工具失败：${this.task.lastToolFailure.toolName} - ${this.task.lastToolFailure.error}`,
+        validationError: true
       };
     }
     const rule = this.finishTaskSummaryMeetsUserMessageRule(args && args.summary);
@@ -2371,6 +2372,7 @@ var ZoteroAssistantPluginLibrary = (() => {
     }
 
     const results = [];
+    let actualLookups = 0;
     for (const key of keys) {
       const item = await this.getItemByKey(key);
       if (!item) {
@@ -2388,6 +2390,7 @@ var ZoteroAssistantPluginLibrary = (() => {
         results.push(Object.assign({ cacheHit: true }, this.task.metadataLookupCache[cacheKey]));
         continue;
       }
+      actualLookups += 1;
       const lookup = await this.lookupCandidatesForContext(ctx, config);
       const result = {
         ok: true,
@@ -2421,8 +2424,8 @@ var ZoteroAssistantPluginLibrary = (() => {
       this.task.metadataLookupCache[cacheKey] = result;
       results.push(result);
     }
-    this.task.roundMetadataLookupCount = (this.task.roundMetadataLookupCount || 0) + keys.length;
-    this.task.metadataLookupCount = (this.task.metadataLookupCount || 0) + keys.length;
+    this.task.roundMetadataLookupCount = (this.task.roundMetadataLookupCount || 0) + actualLookups;
+    this.task.metadataLookupCount = (this.task.metadataLookupCount || 0) + actualLookups;
     this.log("metadata.lookup", {
       itemCount: keys.length,
       useTextProbe,
@@ -3429,19 +3432,28 @@ var ZoteroAssistantPluginLibrary = (() => {
       return { ok: false, error: "update_metadata 不能修改 itemType。要把顶层附件变成书籍/文章父条目，请改用 create_parent_item。" };
     }
     const before = {};
-    for (const [field, value] of Object.entries(args.fields || {})) {
-      before[field] = item.getField(field);
-      item.setField(field, value);
-    }
+    const written = [];
     let beforeCreators = null;
-    if (hasCreators) {
-      beforeCreators = this.currentCreatorsSnapshot(item);
-      const creators = this.normalizeCreators(args.creators);
-      if (typeof item.setCreators === "function") {
-        item.setCreators(creators);
+    try {
+      for (const [field, value] of Object.entries(args.fields || {})) {
+        before[field] = item.getField(field);
+        item.setField(field, value);
+        written.push(field);
       }
+      if (hasCreators) {
+        beforeCreators = this.currentCreatorsSnapshot(item);
+        const creators = this.normalizeCreators(args.creators);
+        if (typeof item.setCreators === "function") {
+          item.setCreators(creators);
+        }
+      }
+      await item.saveTx();
+    } catch (error) {
+      for (const field of written) {
+        try { item.setField(field, before[field]); } catch (_) {}
+      }
+      return { ok: false, error: `元数据写入失败：${error}` };
     }
-    await item.saveTx();
     this.undoStack.push({
       type: "restore_fields",
       itemID: item.id,
@@ -3757,13 +3769,19 @@ var ZoteroAssistantPluginLibrary = (() => {
     for (const tag of copiedTags) {
       parent.addTag(tag);
     }
-    await parent.saveTx();
-    if (copyCollections && attachmentCollectionIDs.length) {
-      await this.addItemToCollectionIDs(parent.id, attachmentCollectionIDs);
-    }
-
-    attachment.parentID = parent.id;
-    await attachment.saveTx();
+    await Zotero.DB.executeTransaction(async () => {
+      await parent.save();
+      if (copyCollections && attachmentCollectionIDs.length) {
+        for (const collectionID of Array.from(new Set(attachmentCollectionIDs.filter(Boolean)))) {
+          const collection = Zotero.Collections.get(collectionID);
+          if (collection) {
+            await collection.addItems([parent.id]);
+          }
+        }
+      }
+      attachment.parentID = parent.id;
+      await attachment.save();
+    });
 
     this.undoStack.push({
       type: "detach_attachment_from_parent_item",
@@ -4223,11 +4241,7 @@ var ZoteroAssistantPluginLibrary = (() => {
       raw = await this.resolveMaybePromise(safeCall(() => Zotero.Items.getByParentAsync && Zotero.Items.getByParentAsync(attachment.id)));
     }
     if (!Array.isArray(raw) || !raw.length) {
-      raw = await this.resolveMaybePromise(safeCall(() => Zotero.Items.getByParent && Zotero.Items.getByParent(attachment.id)));
-    }
-    if (!Array.isArray(raw) || !raw.length) {
-      const allItems = await this.resolveMaybePromise(safeCall(() => Zotero.Items.getAll && Zotero.Items.getAll(attachment.libraryID)));
-      raw = Array.isArray(allItems) ? allItems.filter((item) => item && item.parentID === attachment.id) : [];
+      raw = await this.resolveMaybePromise(safeCall(() => Zotero.Items.getByParent && Zotero.Items.getByParent(attachment.id, false, true)));
     }
     return (Array.isArray(raw) ? raw : [])
       .map((entry) => typeof entry === "number" ? Zotero.Items.get(entry) : entry)

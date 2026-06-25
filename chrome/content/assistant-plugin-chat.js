@@ -1640,15 +1640,12 @@ var ZoteroAssistantPluginChat = (() => {
       return;
     }
     if (this.taskLoopActive) {
-      this.log("task.loop.skipped_reentrant", { id: this.task.id });
-      this.task.status = "paused";
-      this.task.phase = "loop_busy";
-      this.task.error = this.t("loopBusy");
-      this.showChatNotice(state, this.task.error);
-      this.renderAll();
+      this.taskLoopResumeRequested = true;
+      this.log("task.loop.queued_reentrant", { id: this.task.id });
       return;
     }
     this.taskLoopActive = true;
+    this.taskLoopResumeRequested = false;
     const taskId = this.task.id;
     this.task.phase = "injecting_context";
     this.log("task.loop.entered", { id: taskId, phase: this.task.phase });
@@ -1668,6 +1665,10 @@ var ZoteroAssistantPluginChat = (() => {
         this.flushChatTurnToDisplay();
         this.renderAll();
         this.scheduleChatRepaint(state);
+        if (this.taskLoopResumeRequested && this.task && this.task.id === taskId && this.task.status === "running") {
+          this.taskLoopResumeRequested = false;
+          this.runTaskLoopInBackground(state);
+        }
       });
   },
 
@@ -2128,6 +2129,10 @@ var ZoteroAssistantPluginChat = (() => {
     if (this.task.libraryID && this.task.libraryID !== libraryID) {
       this.task.libraryID = libraryID;
       this.task.libraryName = taskLibrary.libraryName;
+      this.task.contextInjected = false;
+      this.task.processedItems = null;
+      this.task.roundMetadataLookupCount = 0;
+      this.task.roundWebFetchCount = 0;
       const switchReason = taskLibrary.source === "selection"
         ? "The user sent a selected-text question from a Zotero source in another library."
         : "The user switched the active Zotero library in the UI.";

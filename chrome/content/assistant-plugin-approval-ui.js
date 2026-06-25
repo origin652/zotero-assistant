@@ -142,7 +142,8 @@ var ZoteroAssistantPluginApprovalUi = (() => {
       }
       return;
     }
-    const msg = this.el(state.doc, "div", "", text);
+    const msg = this.el(state.doc, "div", "", "");
+    msg.textContent = text;
     msg.style.cssText = "padding:10px 12px;background:rgba(255,251,235,0.95);border:1px solid rgba(245,158,11,0.28);border-radius:8px;margin-bottom:8px;white-space:pre-wrap;font-size:12px;line-height:1.45;";
     body.insertBefore(msg, body.firstChild);
   },

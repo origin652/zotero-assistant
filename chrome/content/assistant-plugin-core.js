@@ -191,6 +191,9 @@ var ZoteroAssistantPluginCore = (() => {
       }
       state.prefPaneLocalizationTimer = state.win.setTimeout(() => {
         state.prefPaneLocalizationTimer = null;
+        if (!state.doc || !state.doc.getElementById("zotero-prefpane-zotero-assistant")) {
+          return;
+        }
         this.localizePreferencePaneDocument(state.doc);
       }, 0);
     };

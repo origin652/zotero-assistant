@@ -314,6 +314,12 @@ var ZoteroAssistantPluginPrefs = (() => {
     if (meta.name === PREFS.contextCompressionKeepMessages && (typeof value !== "number" || value < 4 || value > 80)) {
       throw new Error("contextCompressionKeepMessages 必须是 4 到 80 之间的整数。");
     }
+    if (meta.name === PREFS.contextCompressionMaxTokens && (typeof value !== "number" || value < 8000 || value > 2000000)) {
+      throw new Error("contextCompressionMaxTokens 必须是 8000 到 2000000 之间的整数。");
+    }
+    if (meta.name === PREFS.contextCompressionTargetTokens && (typeof value !== "number" || value < 1000 || value > 500000)) {
+      throw new Error("contextCompressionTargetTokens 必须是 1000 到 500000 之间的整数。");
+    }
   },
 
   async toolSetPreference(args) {

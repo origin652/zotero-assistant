@@ -433,6 +433,7 @@ var ZoteroAssistantPluginModel = (() => {
     let reason = this.t("auditUnavailable");
     let ok = false;
     try {
+      let auditTimer = null;
       const auditPromise = this.callModelWithRetries(
         [{ role: "user", content: JSON.stringify(payload) }],
         {
@@ -442,13 +443,19 @@ var ZoteroAssistantPluginModel = (() => {
           systemInstruction: this.auditSystemInstruction(),
           modelOverride: this.auditModelName()
         }
-      );
+      ).catch((e) => e);
       const timeoutPromise = new Promise((resolve) => {
-        const timer = Components.classes["@mozilla.org/timer;1"]
+        auditTimer = Components.classes["@mozilla.org/timer;1"]
           .createInstance(Components.interfaces.nsITimer);
-        timer.initWithCallback({ notify: () => resolve("__timeout__") }, AUDIT_FETCH_TIMEOUT_MS, Components.interfaces.nsITimer.TYPE_ONE_SHOT);
+        auditTimer.initWithCallback({ notify: () => resolve("__timeout__") }, AUDIT_FETCH_TIMEOUT_MS, Components.interfaces.nsITimer.TYPE_ONE_SHOT);
       });
       const raw = await Promise.race([auditPromise, timeoutPromise]);
+      if (auditTimer) {
+        auditTimer.cancel();
+      }
+      if (raw instanceof Error) {
+        throw raw;
+      }
       if (raw === "__timeout__") {
         throw new Error(this.t("auditTimeout", { ms: AUDIT_FETCH_TIMEOUT_MS }));
       }
@@ -1264,6 +1271,23 @@ var ZoteroAssistantPluginModel = (() => {
     return "";
   },
 
+  async fillSkippedToolResults(toolCalls, startIndex, reason) {
+    if (!Array.isArray(toolCalls)) return;
+    for (let j = startIndex; j < toolCalls.length; j++) {
+      const skipped = toolCalls[j];
+      if (!skipped || !skipped.id) continue;
+      const already = this.task.messages.some(
+        (m) => m && m.role === "tool" && m.tool_call_id === skipped.id
+      );
+      if (already) continue;
+      this.task.messages.push({
+        role: "tool",
+        tool_call_id: skipped.id,
+        content: JSON.stringify({ ok: false, skipped: true, error: reason })
+      });
+    }
+  },
+
   async handleModelResponse(message) {
     this.task.messages.push(message);
     this.absorbAssistantMessageForChatDisplay(message);
@@ -1272,7 +1296,8 @@ var ZoteroAssistantPluginModel = (() => {
       return;
     }
     this.task.emptyAssistantTurnCount = 0;
-    for (const call of message.tool_calls) {
+    for (let i = 0; i < message.tool_calls.length; i++) {
+      const call = message.tool_calls[i];
       const name = call.function && call.function.name;
       const args = this.parseArguments(call.function && call.function.arguments);
       if (!name) {
@@ -1287,6 +1312,7 @@ var ZoteroAssistantPluginModel = (() => {
           this.task.pendingApproval.aiLevel = approval.aiLevel;
           this.task.pendingApproval.aiReason = approval.aiReason || "";
         }
+        await this.fillSkippedToolResults(message.tool_calls, i + 1, "skipped: earlier tool in this turn is awaiting approval");
         this.log("approval.requested", this.task.pendingApproval);
         this.flushChatTurnToDisplay();
         this.renderAll();
@@ -1329,6 +1355,8 @@ var ZoteroAssistantPluginModel = (() => {
             consecutiveToolFailures: this.task.consecutiveToolFailures || 0
           });
           await this.safeUpdateSessionMemoryForTask("tool_failed");
+        } else {
+          await this.fillSkippedToolResults(message.tool_calls, i + 1, `skipped: earlier tool ${name} in this turn failed`);
         }
         this.flushChatTurnToDisplay();
         return;
@@ -1463,18 +1491,34 @@ var ZoteroAssistantPluginModel = (() => {
   async callModelWithRetries(messages, options = {}) {
     let lastError;
     const attempts = [];
+    const delay = (ms) => new Promise((resolve) => {
+      const setTimer = typeof setTimeout === "function" ? setTimeout : null;
+      if (setTimer) {
+        setTimer(resolve, ms);
+      } else {
+        resolve();
+      }
+    });
     for (let attempt = 0; attempt <= MAX_MODEL_RETRIES; attempt++) {
       try {
         return await this.callModel(messages, options);
       } catch (error) {
         lastError = error;
+        const status = error && error.debugInfo && error.debugInfo.response && error.debugInfo.response.status;
         attempts.push({
           attempt,
           error: String(error),
           source: error && error.source ? error.source : "model",
+          status: status || null,
           debugInfo: error && error.debugInfo ? error.debugInfo : null
         });
-        this.log("model.retry", { attempt, error: String(error) });
+        this.log("model.retry", { attempt, error: String(error), status: status || null });
+        const isClientError = typeof status === "number" && status >= 400 && status < 500 && status !== 429;
+        if (isClientError || attempt >= MAX_MODEL_RETRIES) {
+          break;
+        }
+        const backoff = Math.min(8000, 500 * Math.pow(2, attempt));
+        await delay(backoff);
       }
     }
     if (lastError) {
@@ -1779,6 +1823,7 @@ var ZoteroAssistantPluginModel = (() => {
       }
       throw error;
     } finally {
+      workPromise.catch(() => {});
       if (timer != null) {
         const clearTimer = win && typeof win.clearTimeout === "function" ? win.clearTimeout.bind(win) : clearTimeout;
         clearTimer(timer);
