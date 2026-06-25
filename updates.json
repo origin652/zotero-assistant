@@ -5,6 +5,10 @@
         {
           "version": "0.1.2",
           "update_link": "https://github.com/origin652/zotero-assistant/releases/download/v0.1.2/zotero-assistant.xpi"
+        },
+        {
+          "version": "0.1.4",
+          "update_link": "https://github.com/origin652/zotero-assistant/releases/download/v0.1.4/zotero-assistant.xpi"
         }
       ]
     }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero Assistant",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Zotero 9 desktop assistant with task harness, button approvals, audit log, and reversible library actions.",
   "icons": {
     "16": "icons/zotero-assistant-icon-16.png",
